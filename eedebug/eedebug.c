@@ -172,8 +172,10 @@ void eedebug_thread(void *unused)
 	eePrint("eedebug_thread running.\n");
 	while (1) {
 		if (bufferReadPos != bufferWritePos) {
-			int i;
+			int i, id;
 
+			/* Copy text data */
+			WaitSema(tty_sema);
 			i = 0;
 			while(bufferReadPos != bufferWritePos) {
 				text_data.text[i] = buffer[bufferReadPos];
@@ -184,13 +186,19 @@ void eedebug_thread(void *unused)
 				}
 			}
 			text_data.text[i] = 0;
-			
-//			text_data.text[0] = 'T';
-//			text_data.text[1] = 0;
-//			sprintf(text_data.text, "0x%02x\n", text_data.text[0]);
-			while (!sceSifSendCmd(0x00000010, &text_data, sizeof(text_data), NULL,
-                NULL, 0)) {
-				//printf("Failed to send message.\n");
+			SignalSema(tty_sema);
+
+			/* Start transfer to EE */
+			while ((id = sceSifSendCmd(0x00000010, &text_data, sizeof(text_data), NULL, NULL, 0)) == 0) {
+				/* Try in one millisecond again. */
+				DelayThread(1000);
+			}
+
+			/* Wait for transfer to finish */
+			while (sceSifDmaStat(id) >= 0)
+			{
+				/* Try in one millisecond again. */
+				DelayThread(1000);
 			}
 		} else {
 			/* Try in one millisecond again. */
