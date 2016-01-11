@@ -17,10 +17,12 @@ clean:
 	make -C eedebug clean
 
 install:
-	cp intrelay/bin/intrelay-dev9.irx       ../linux/firmware/ps2/
-	cp intrelay/bin/intrelay-dev9-rpc.irx   ../linux/firmware/ps2/
-	cp intrelay/bin/intrelay-direct.irx     ../linux/firmware/ps2/
-	cp intrelay/bin/intrelay-direct-rpc.irx ../linux/firmware/ps2/
-	cp dmarelay/bin/dmarelay.irx            ../linux/firmware/ps2/
-	cp smaprpc/smaprpc.irx                  ../linux/firmware/ps2/
-	cp eedebug/eedebug.irx                  ../linux/firmware/ps2/
+	cp intrelay/bin/intrelay-dev9.irx       compiled_irx/
+	cp intrelay/bin/intrelay-dev9-rpc.irx   compiled_irx/
+	cp intrelay/bin/intrelay-direct.irx     compiled_irx/
+	cp intrelay/bin/intrelay-direct-rpc.irx compiled_irx/
+	cp dmarelay/bin/dmarelay.irx            compiled_irx/
+	cp smaprpc/smaprpc.irx                  compiled_irx/
+	cp eedebug/eedebug.irx                  compiled_irx/
+	cp compiled_irx/*			../linux/firmware/ps2/
+

@@ -1,4 +1,7 @@
 bin/
 obj*/
 *.o
-*.irx
+
+eedebug/*.irx
+smaprpc/*.irx
+
