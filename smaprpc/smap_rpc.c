@@ -116,6 +116,11 @@ void *rpcCommandHandler(u32 command, void *buffer, int size)
 			break;
 		}
 
+		case SMAP_CMD_SET_MAC_ADDR: {
+			SMap_SetMacAddress((const char *)buffer);
+			break;
+		}
+
 		default:
 			printf("Received unknown cmd %lu\n", command);
 			ret = -1;

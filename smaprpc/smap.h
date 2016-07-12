@@ -36,6 +36,7 @@ typedef enum SMapStatus		{SMap_OK,SMap_Err,SMap_Con,SMap_TX} SMapStatus;
 
 //Function prototypes
 int			SMap_Init(void);
+void			SMap_SetMacAddress(const char *addr);
 void			SMap_Start(void);
 void			SMap_Stop(void);
 int			SMap_CanSend(void);
