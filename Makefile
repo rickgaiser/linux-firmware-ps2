@@ -15,6 +15,7 @@ clean:
 	make -C dmarelay clean
 	make -C smaprpc clean
 	make -C eedebug clean
+	rm -f compiled_irx/*
 
 install:
 	cp intrelay/bin/intrelay-dev9.irx       compiled_irx/
