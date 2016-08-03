@@ -15,7 +15,7 @@ clean:
 	make -C dmarelay clean
 	make -C smaprpc clean
 	make -C eedebug clean
-	rm -f compiled_irx/*
+	rm -f compiled_irx/*.irx
 
 install:
 	cp intrelay/bin/intrelay-dev9.irx       compiled_irx/
@@ -25,5 +25,6 @@ install:
 	cp dmarelay/bin/dmarelay.irx            compiled_irx/
 	cp smaprpc/smaprpc.irx                  compiled_irx/
 	cp eedebug/eedebug.irx                  compiled_irx/
-	cp compiled_irx/*			../linux/firmware/ps2/
+	cp compiled_irx/*.irx			../linux/firmware/ps2/
+	cp compiled_irx/ps2sdk/*.irx		../linux/firmware/ps2/
 
