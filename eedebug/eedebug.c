@@ -25,6 +25,7 @@ void eedebug_thread(void *unused);
 static volatile char buffer[BUFFER_SIZE];
 static volatile int bufferReadPos = 0;
 static volatile int bufferWritePos = 0;
+static int tty_sema = -1;
 
 
 /** IOP Module entry point, install io driver redirecting every printf() to EE. */
@@ -38,7 +39,7 @@ int _start(int argc, char **argv)
 		sceSifInit();
 	sceSifInitRpc(0);
 
-	printf("Started eedebug!\n");
+	printf(MODNAME ": Started eedebug!\n");
 
 	thread.attr = TH_C;
 	thread.option = 0;
@@ -47,14 +48,14 @@ int _start(int argc, char **argv)
 	thread.priority = 40;
 
 	if ((res = CreateThread(&thread)) < 0) {
-		printf("cannot create thread (%d).\n", res);
-		eePrint("cannot create thread\n");
+		printf(MODNAME ": cannot create thread (%d).\n", res);
+		eePrint(MODNAME ": cannot create thread\n");
 		return -1;
 	}
 
 	StartThread(res, NULL);
 
-	eePrint("EE debug start\n");
+	eePrint(MODNAME ": EE debug start\n");
 
 	ttyMount();
 	return 0;
@@ -67,14 +68,47 @@ static eePrint(const char *text)
 	text_data.text[79] = 0;
 	if (!sceSifSendCmd(0x00000010, &text_data, 64, NULL,
                 NULL, 0)) {
-		printf("Failed to send message.\n");
+		printf(MODNAME ": Failed to send message.\n");
 	}
 }
 
+static void eePrintBuffer()
+{
+	static iop_text_data_t text_data __attribute__((aligned(64)));
+
+	while (bufferReadPos != bufferWritePos) {
+		int i, id;
+
+		/* Copy text data */
+		WaitSema(tty_sema);
+		i = 0;
+		while(bufferReadPos != bufferWritePos) {
+			text_data.text[i] = buffer[bufferReadPos];
+			bufferReadPos = (bufferReadPos + 1) % BUFFER_SIZE;
+			i++;
+			if (i >= (sizeof(text_data.text - 1))) {
+				break;
+			}
+		}
+		text_data.text[i] = 0;
+		SignalSema(tty_sema);
+
+		/* Start transfer to EE */
+		while ((id = sceSifSendCmd(0x00000010, &text_data, sizeof(text_data), NULL, NULL, 0)) == 0) {
+			/* Try in one millisecond again. */
+			DelayThread(1000);
+		}
+
+		/* Wait for transfer to finish */
+		while (sceSifDmaStat(id) >= 0)
+		{
+			/* Try in one millisecond again. */
+			DelayThread(1000);
+		}
+	}
+}
 
 ////////////////////////////////////////////////////////////////////////
-
-static int tty_sema = -1;
 
 static char ttyname[] = "tty";
 
@@ -128,9 +162,13 @@ static int ttyWrite(iop_file_t *file, char *buf, int size)
 
 		pos = (bufferWritePos + 1) % BUFFER_SIZE;
 		if (pos == bufferReadPos) {
-			eePrint("Loosing characters.\n");
-			/* Loosing characters, ionsert return for better display. */
-			break;
+			eePrint("\n\n" MODNAME ": Buffer full\n\n");
+
+			// HACK ON
+			SignalSema(tty_sema);
+			eePrintBuffer();
+			WaitSema(tty_sema);
+			// HACK OFF
 		}
 
 		buffer[bufferWritePos] = buf[i];
@@ -168,40 +206,10 @@ void eedebug_thread(void *unused)
 {
 	static iop_text_data_t text_data __attribute__((aligned(64)));
 
-	eePrint("eedebug_thread running.\n");
+	eePrint(MODNAME ": eedebug_thread running.\n");
 	while (1) {
-		if (bufferReadPos != bufferWritePos) {
-			int i, id;
-
-			/* Copy text data */
-			WaitSema(tty_sema);
-			i = 0;
-			while(bufferReadPos != bufferWritePos) {
-				text_data.text[i] = buffer[bufferReadPos];
-				bufferReadPos = (bufferReadPos + 1) % BUFFER_SIZE;
-				i++;
-				if (i >= (sizeof(text_data.text - 1))) {
-					break;
-				}
-			}
-			text_data.text[i] = 0;
-			SignalSema(tty_sema);
-
-			/* Start transfer to EE */
-			while ((id = sceSifSendCmd(0x00000010, &text_data, sizeof(text_data), NULL, NULL, 0)) == 0) {
-				/* Try in one millisecond again. */
-				DelayThread(1000);
-			}
-
-			/* Wait for transfer to finish */
-			while (sceSifDmaStat(id) >= 0)
-			{
-				/* Try in one millisecond again. */
-				DelayThread(1000);
-			}
-		} else {
-			/* Try in one millisecond again. */
-			DelayThread(1000);
-		}
+		eePrintBuffer();
+		/* Try in one millisecond again. */
+		DelayThread(100 * 1000);
 	}
 }
