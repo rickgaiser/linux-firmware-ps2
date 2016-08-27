@@ -13,7 +13,7 @@
 struct ps2_ata_cmd_rw {
 	struct t_SifCmdHeader sifcmd;
 	u32 write;
-	u32 offset;
+	u32 addr;
 	u32 size;
 	u32 callback;
 	u32 spare[16-4];
@@ -21,7 +21,7 @@ struct ps2_ata_cmd_rw {
 
 struct cmd_transfer {
 	struct ps2_ata_cmd_rw cmd;
-	u32 offset;		/* Address in EE where current transfer will go to */
+	void *addr;		/* Address in EE where current transfer will go to */
 	u32 size_left;		/* Size that still needs to be transferred */
 };
 static struct cmd_transfer transfer __attribute((aligned(64)));
@@ -36,11 +36,12 @@ _cmd_transfer_callback(void *addr, u32 size, void *arg)
 	struct cmd_transfer *tr = arg;
 	SifDmaTransfer_t dma;
 
-	/* Start DMA transfer: IOP -> EE */
 	if (tr->size_left > size) {
-		/* Not finished, send data only */
+		/* Not finished */
+
+		/* Send data only */
 		dma.src  = addr;
-		dma.dest = (void *)tr->offset;
+		dma.dest = tr->addr;
 		dma.size = size;
 		dma.attr = 0;
 		/* FIXME: no isceSifSetDma? */
@@ -48,11 +49,13 @@ _cmd_transfer_callback(void *addr, u32 size, void *arg)
 
 		/* Update statistics */
 		tr->size_left -= size;
-		tr->offset    += size;
+		tr->addr       = (u8 *)tr->addr + size;
 	}
 	else {
-		/* Finished, send data and CMD */
-		isceSifSendCmd(CMD_ATA_RW, (void *)&tr->cmd, sizeof(struct ps2_ata_cmd_rw), addr, (void *)tr->offset, size);
+		/* Finished */
+
+		/* Send CMD and data */
+		isceSifSendCmd(CMD_ATA_RW, (void *)&tr->cmd, sizeof(struct ps2_ata_cmd_rw), addr, tr->addr, size);
 	}
 }
 
@@ -62,10 +65,10 @@ _cmd_handle(void *data, void *harg)
 	struct ps2_ata_cmd_rw *cmd = (struct ps2_ata_cmd_rw *)data;
 	struct cmd_transfer *tr = &transfer;
 
-	M_DEBUG("cmd received (%lu, %lu, %lu)\n", cmd->write, cmd->offset, cmd->size);
+	M_DEBUG("cmd received (%lu, %lu, %lu)\n", cmd->write, cmd->addr, cmd->size);
 
 	/* Set global state of transfer */
-	tr->offset    = cmd->offset;
+	tr->addr      = (void *)cmd->addr;
 	tr->size_left = cmd->size;
 	tr->cmd	      = *cmd;
 

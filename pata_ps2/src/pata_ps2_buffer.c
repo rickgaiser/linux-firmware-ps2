@@ -6,9 +6,7 @@
 #include "dmacman.h"
 
 #include "dev9.h"
-#include "dev9regs.h"
 #include "speedregs.h"
-#include "smapregs.h"
 
 
 u8 _data_buffer[DATA_BUFFER_SIZE] __attribute((aligned(64)));
@@ -24,8 +22,8 @@ enum{
 };
 
 struct buffer_transfer {
-	u32 size;		/* Size that still needs to be transferred */
-	u32 xfer_size;		/* Size currently being transferred */
+	u32 size_left;		/* Size that still needs to be transferred */
+	u32 size_xfer;		/* Size currently being transferred */
 	int write;
 	int state;
 	block_done_callback cb;
@@ -35,8 +33,11 @@ static struct buffer_transfer transfer;
 
 static void _transfer_block(struct buffer_transfer *tr);
 
-inline u32 min(u32 a, u32 b) {return (a<b)?a:b;}
-inline u32 max(u32 a, u32 b) {return (a>b)?a:b;}
+/*
+ * private functions
+ */
+static inline u32 min(u32 a, u32 b) {return (a<b)?a:b;}
+static inline u32 max(u32 a, u32 b) {return (a>b)?a:b;}
 
 static void
 _transfer_callback(void *addr, u32 size, void *arg)
@@ -50,9 +51,9 @@ _transfer_callback(void *addr, u32 size, void *arg)
 
 	tr->cb(addr, size, tr->cb_arg);
 
-	_data_buffer_pointer += tr->xfer_size;
-	tr->size -= tr->xfer_size;
-	if (tr->size > 0) {
+	_data_buffer_pointer += tr->size_xfer;
+	tr->size_left -= tr->size_xfer;
+	if (tr->size_left > 0) {
 		/* Advance to next transfer */
 		tr->state = TRS_WAITING;
 		_transfer_block(tr);
@@ -78,25 +79,28 @@ _transfer_block(struct buffer_transfer *tr)
 	 *   if we want the transfer from IOP->EE to run parallel
 	 *   we need to split the transfer.
 	 */
-	tr->xfer_size = tr->size;
-	if (tr->xfer_size > MIN_TRANSFER_SIZE) {
+	tr->size_xfer = tr->size_left;
+	if (tr->size_xfer > MIN_TRANSFER_SIZE) {
 		/* Try to transfer 75% (aligned down), then start transfer to EE */
-		tr->xfer_size = ((tr->xfer_size >> 2) * 3) & ~(512-1);
+		tr->size_xfer = ((tr->size_xfer >> 2) * 3) & ~(512-1);
 		/* But not too small */
-		tr->xfer_size = max(tr->xfer_size, MIN_TRANSFER_SIZE);
+		tr->size_xfer = max(tr->size_xfer, MIN_TRANSFER_SIZE);
 		/* And not too big */
-		tr->xfer_size = min(tr->xfer_size, MAX_TRANSFER_SIZE);
+		tr->size_xfer = min(tr->size_xfer, MAX_TRANSFER_SIZE);
 	}
 
-	/* Update the "ring" buffer */
-	if (DATA_BUFFER_FREE() < tr->xfer_size)
+	/* Reset the ring-buffer if needed */
+	if (DATA_BUFFER_FREE() < tr->size_xfer)
 		DATA_BUFFER_RESET();
 
 	/* Start DMA transfer: IOP <--> SPEED */
-	pata_ps2_core_transfer(_data_buffer_pointer, tr->xfer_size, tr->write, _transfer_callback, tr);
 	tr->state = TRS_TRANSFER;
+	pata_ps2_core_transfer(_data_buffer_pointer, tr->size_xfer, tr->write, _transfer_callback, tr);
 }
 
+/*
+ * public functions
+ */
 void
 pata_ps2_buffer_transfer(u32 size, u32 write, block_done_callback cb, void *cb_arg)
 {
@@ -107,11 +111,11 @@ pata_ps2_buffer_transfer(u32 size, u32 write, block_done_callback cb, void *cb_a
 		return;
 	}
 
-	tr->size   = size;
-	tr->write  = write;
-	tr->cb     = cb;
-	tr->cb_arg = cb_arg;
-	tr->state  = TRS_WAITING;
+	tr->size_left = size;
+	tr->write     = write;
+	tr->cb        = cb;
+	tr->cb_arg    = cb_arg;
+	tr->state     = TRS_WAITING;
 
 	dev9LEDCtl(1);
 	_transfer_block(tr);

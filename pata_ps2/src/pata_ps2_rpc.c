@@ -29,29 +29,38 @@ static SifRpcServerData_t rpc_server __attribute((aligned(64)));
 static u8 _rpc_buffer[1024] __attribute((aligned(64)));
 
 
-static int pata_ps2_rpc_get_addr(struct ps2_ata_rpc_get_addr *rpc)
+/*
+ * private functions
+ */
+static inline int
+_rpc_get_addr(struct ps2_ata_rpc_get_addr *rpc)
 {
+	M_DEBUG("PATA_PS2_GET_ADDR()\n");
+
 	rpc->addr = (u32)_data_buffer;
 	rpc->size = DATA_BUFFER_SIZE;
 
 	return 0;
 }
 
-static void *pata_ps2_rpc_cmd_handler(u32 command, void *buffer, int size)
+static inline int
+_rpc_set_dir(struct ps2_ata_rpc_set_dir *rpc)
+{
+	M_DEBUG("PATA_PS2_SET_DIR(%lu)\n", rpc->dir);
+
+	pata_ps2_core_set_dir(rpc->dir);
+
+	return 0;
+}
+
+static void *
+_rpc_cmd_handler(u32 command, void *buffer, int size)
 {
 	int ret;
 
 	switch (command) {
-		case PATA_PS2_GET_ADDR:
-			M_DEBUG("PATA_PS2_GET_ADDR()\n");
-			ret = pata_ps2_rpc_get_addr((struct ps2_ata_rpc_get_addr *)buffer);
-			break;
-
-		case PATA_PS2_SET_DIR:
-			M_DEBUG("PATA_PS2_SET_DIR(%lu)\n", ((u32 *)buffer)[0]);
-			pata_ps2_core_set_dir(((u32 *)buffer)[0]);
-			ret = 0;
-			break;
+		case PATA_PS2_GET_ADDR: ret = _rpc_get_addr(buffer); break;
+		case PATA_PS2_SET_DIR:	ret = _rpc_set_dir(buffer);  break;
 
 		default:
 			M_ERROR("unknown cmd %lu\n", command);
@@ -64,7 +73,8 @@ static void *pata_ps2_rpc_cmd_handler(u32 command, void *buffer, int size)
 	return buffer;
 }
 
-static void pata_ps2_rpc_thread(void* param)
+static void
+_rpc_thread(void* param)
 {
 	int tid;
 
@@ -73,18 +83,22 @@ static void pata_ps2_rpc_thread(void* param)
 	tid = GetThreadId();
 
 	sceSifSetRpcQueue(&rpc_queue, tid);
-	sceSifRegisterRpc(&rpc_server, PATA_PS2_IRX, (void *)pata_ps2_rpc_cmd_handler, _rpc_buffer, 0, 0, &rpc_queue);
+	sceSifRegisterRpc(&rpc_server, PATA_PS2_IRX, (void *)_rpc_cmd_handler, _rpc_buffer, 0, 0, &rpc_queue);
 	sceSifRpcLoop(&rpc_queue);
 }
 
-int pata_ps2_rpc_init()
+/*
+ * public functions
+ */
+int
+pata_ps2_rpc_init()
 {
 	iop_thread_t param;
 	int th;
 
 	/*create thread*/
 	param.attr	= TH_C;
-	param.thread	= pata_ps2_rpc_thread;
+	param.thread	= _rpc_thread;
 	param.priority	= 40;
 	param.stacksize	= 0x1000;
 	param.option	= 0;
@@ -96,4 +110,3 @@ int pata_ps2_rpc_init()
 	} else
 		return 1;
 }
-

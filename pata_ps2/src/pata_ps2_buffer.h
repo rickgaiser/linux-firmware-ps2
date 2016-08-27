@@ -6,6 +6,12 @@
 #include "pata_ps2_core.h"
 
 
+/*
+ * Make the ring-buffer large enough so the SPEED->IOP transfer will not
+ * overwrite the IOP->EE transfer.
+ *
+ * The transfer to EE is about 4 times faster, so locking is not needed.
+ */
 #define MIN_TRANSFER_SIZE	( 4*1024)
 #define MAX_TRANSFER_SIZE	(32*1024)
 #define DATA_BUFFER_SIZE	(4*MAX_TRANSFER_SIZE)
