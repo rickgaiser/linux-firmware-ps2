@@ -22,6 +22,7 @@ enum{
 };
 
 struct buffer_transfer {
+	void *addr;		/* Address in ring-buffer when writing */
 	u32 size_left;		/* Size that still needs to be transferred */
 	u32 size_xfer;		/* Size currently being transferred */
 	int write;
@@ -73,25 +74,30 @@ _transfer_block(struct buffer_transfer *tr)
 		return;
 	}
 
-	/*
-	 * Determine the optimal nr of blocks for transfer:
-	 *   Bigger transfers between SPEED<->IOP are better, but
-	 *   if we want the transfer from IOP->EE to run parallel
-	 *   we need to split the transfer.
-	 */
 	tr->size_xfer = tr->size_left;
-	if (tr->size_xfer > MIN_TRANSFER_SIZE) {
-		/* Try to transfer 75% (aligned down), then start transfer to EE */
-		tr->size_xfer = ((tr->size_xfer >> 2) * 3) & ~(512-1);
-		/* But not too small */
-		tr->size_xfer = max(tr->size_xfer, MIN_TRANSFER_SIZE);
-		/* And not too big */
-		tr->size_xfer = min(tr->size_xfer, MAX_TRANSFER_SIZE);
-	}
 
-	/* Reset the ring-buffer if needed */
-	if (DATA_BUFFER_FREE() < tr->size_xfer)
-		DATA_BUFFER_RESET();
+	if (tr->write == 0) {
+		/*
+		 * When reading, the IOP controls the ring-buffer.
+		 *
+		 * Determine the optimal nr of blocks for transfer:
+		 *   Bigger transfers between SPEED<->IOP are better, but
+		 *   if we want the transfer from IOP->EE to run parallel
+		 *   we need to split the transfer.
+		 */
+		if (tr->size_xfer > MIN_TRANSFER_SIZE) {
+			/* Try to transfer 75% (aligned down), then start transfer to EE */
+			tr->size_xfer = ((tr->size_xfer >> 2) * 3) & ~(512-1);
+			/* But not too small */
+			tr->size_xfer = max(tr->size_xfer, MIN_TRANSFER_SIZE);
+			/* And not too big */
+			tr->size_xfer = min(tr->size_xfer, MAX_TRANSFER_SIZE);
+		}
+
+		/* Reset the ring-buffer if needed */
+		if (DATA_BUFFER_FREE() < tr->size_xfer)
+			DATA_BUFFER_RESET();
+	}
 
 	/* Start DMA transfer: IOP <--> SPEED */
 	tr->state = TRS_TRANSFER;
@@ -102,7 +108,7 @@ _transfer_block(struct buffer_transfer *tr)
  * public functions
  */
 void
-pata_ps2_buffer_transfer(u32 size, u32 write, block_done_callback cb, void *cb_arg)
+pata_ps2_buffer_transfer(void *addr, u32 size, u32 write, block_done_callback cb, void *cb_arg)
 {
 	struct buffer_transfer *tr = &transfer;
 
@@ -111,11 +117,16 @@ pata_ps2_buffer_transfer(u32 size, u32 write, block_done_callback cb, void *cb_a
 		return;
 	}
 
+	tr->addr      = addr;
 	tr->size_left = size;
 	tr->write     = write;
 	tr->cb        = cb;
 	tr->cb_arg    = cb_arg;
 	tr->state     = TRS_WAITING;
+
+	/* When writing the writer controls where we start in the ring-buffer */
+	if (write != 0)
+		_data_buffer_pointer = addr;
 
 	dev9LEDCtl(1);
 	_transfer_block(tr);

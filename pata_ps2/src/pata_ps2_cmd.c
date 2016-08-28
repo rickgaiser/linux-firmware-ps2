@@ -39,13 +39,15 @@ _cmd_transfer_callback(void *addr, u32 size, void *arg)
 	if (tr->size_left > size) {
 		/* Not finished */
 
-		/* Send data only */
-		dma.src  = addr;
-		dma.dest = tr->addr;
-		dma.size = size;
-		dma.attr = 0;
-		/* FIXME: no isceSifSetDma? */
-		sceSifSetDma(&dma, 1);
+		if (tr->cmd.write == 0) {
+			/* Send data only */
+			dma.src  = addr;
+			dma.dest = tr->addr;
+			dma.size = size;
+			dma.attr = 0;
+			/* FIXME: no isceSifSetDma? */
+			sceSifSetDma(&dma, 1);
+		}
 
 		/* Update statistics */
 		tr->size_left -= size;
@@ -53,9 +55,14 @@ _cmd_transfer_callback(void *addr, u32 size, void *arg)
 	}
 	else {
 		/* Finished */
-
-		/* Send CMD and data */
-		isceSifSendCmd(CMD_ATA_RW, (void *)&tr->cmd, sizeof(struct ps2_ata_cmd_rw), addr, tr->addr, size);
+		if (tr->cmd.write == 0) {
+			/* Send CMD and data */
+			isceSifSendCmd(CMD_ATA_RW, (void *)&tr->cmd, sizeof(struct ps2_ata_cmd_rw), addr, tr->addr, size);
+		}
+		else {
+			/* Send CMD */
+			isceSifSendCmd(CMD_ATA_RW, (void *)&tr->cmd, sizeof(struct ps2_ata_cmd_rw), NULL, NULL, 0);
+		}
 	}
 }
 
@@ -72,7 +79,7 @@ _cmd_handle(void *data, void *harg)
 	tr->size_left = cmd->size;
 	tr->cmd	      = *cmd;
 
-	pata_ps2_buffer_transfer(cmd->size, cmd->write, _cmd_transfer_callback, tr);
+	pata_ps2_buffer_transfer((void *)cmd->addr, cmd->size, cmd->write, _cmd_transfer_callback, tr);
 }
 
 /*
