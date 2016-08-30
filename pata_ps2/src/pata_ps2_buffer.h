@@ -13,7 +13,7 @@
  * The transfer to EE is about 4 times faster, so locking is not needed.
  */
 #define MIN_TRANSFER_SIZE	( 4*1024)
-#define MAX_TRANSFER_SIZE	(32*1024)
+#define MAX_TRANSFER_SIZE	(16*1024)
 #define DATA_BUFFER_SIZE	(4*MAX_TRANSFER_SIZE)
 extern u8 _data_buffer[DATA_BUFFER_SIZE];
 

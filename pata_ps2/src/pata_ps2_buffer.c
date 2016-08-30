@@ -40,8 +40,13 @@ static void _transfer_block(struct buffer_transfer *tr);
 static inline u32 min(u32 a, u32 b) {return (a<b)?a:b;}
 static inline u32 max(u32 a, u32 b) {return (a>b)?a:b;}
 
+#ifdef USE_PS2SDK_DEV9
+static void
+_transfer_callback(void *arg)
+#else
 static void
 _transfer_callback(void *addr, u32 size, void *arg)
+#endif
 {
 	struct buffer_transfer *tr = arg;
 
@@ -50,7 +55,7 @@ _transfer_callback(void *addr, u32 size, void *arg)
 		return;
 	}
 
-	tr->cb(addr, size, tr->cb_arg);
+	tr->cb(_data_buffer_pointer, tr->size_xfer, tr->cb_arg);
 
 	_data_buffer_pointer += tr->size_xfer;
 	tr->size_left -= tr->size_xfer;
@@ -101,8 +106,28 @@ _transfer_block(struct buffer_transfer *tr)
 
 	/* Start DMA transfer: IOP <--> SPEED */
 	tr->state = TRS_TRANSFER;
+#ifdef USE_PS2SDK_DEV9
+	dev9DmaTransferAsync(0, _data_buffer_pointer, (tr->size_xfer << 7)|128, (tr->write == 0) ? DMAC_TO_MEM : DMAC_FROM_MEM, _transfer_callback, tr);
+#else
 	pata_ps2_core_transfer(_data_buffer_pointer, tr->size_xfer, tr->write, _transfer_callback, tr);
+#endif
 }
+
+#ifdef USE_PS2SDK_DEV9
+static void AtadPreDmaCb(int bcr, int dir)
+{
+	USE_SPD_REGS;
+
+	SPD_REG16(SPD_R_XFR_CTRL)|=0x80;
+}
+
+static void AtadPostDmaCb(int bcr, int dir)
+{
+	USE_SPD_REGS;
+
+	SPD_REG16(SPD_R_XFR_CTRL)&=~0x80;
+}
+#endif
 
 /*
  * public functions
@@ -138,6 +163,11 @@ pata_ps2_buffer_init()
 	struct buffer_transfer *tr = &transfer;
 
 	tr->state = TRS_DONE;
+
+#ifdef USE_PS2SDK_DEV9
+	dev9RegisterPreDmaCb(0, &AtadPreDmaCb);
+	dev9RegisterPostDmaCb(0, &AtadPostDmaCb);
+#endif
 
 	return 0;
 }

@@ -8,6 +8,7 @@
 #include "speedregs.h"
 
 
+#ifndef USE_PS2SDK_DEV9
 struct core_transfer {
 	void * addr;
 	u32 size;
@@ -58,6 +59,7 @@ _dma_intr_handler(void *arg)
 
 	return 1;
 }
+#endif
 
 /*
  * public functions
@@ -81,6 +83,7 @@ pata_ps2_core_set_dir(int dir)
 	SPD_REG16(SPD_R_XFR_CTRL) = dir | 0x6;
 }
 
+#ifndef USE_PS2SDK_DEV9
 void
 pata_ps2_core_transfer(void *addr, u32 size, u32 write, block_done_callback cb, void *cb_arg)
 {
@@ -94,13 +97,16 @@ pata_ps2_core_transfer(void *addr, u32 size, u32 write, block_done_callback cb, 
 
 	_dma_start(tr);
 }
+#endif
 
 int
 pata_ps2_core_init()
 {
+#ifndef USE_PS2SDK_DEV9
 	/* IOP<->DEV9 DMA completion interrupt */
 	RegisterIntrHandler(IOP_IRQ_DMA_DEV9, 1, _dma_intr_handler, &transfer);
 	EnableIntr(IOP_IRQ_DMA_DEV9);
+#endif
 
 	return 0;
 }
