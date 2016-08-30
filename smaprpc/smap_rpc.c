@@ -23,6 +23,8 @@ static unsigned char payloadBuffer[FRAME_SIZE * NUMBER_OF_BUFFERS];
 static SifRpcDataQueue_t rpc_queue __attribute__((aligned(64)));
 static SifRpcServerData_t rpc_server __attribute((aligned(64)));
 static int _rpc_buffer[2048] __attribute((aligned(64)));
+#define DATA_BUFFER_SIZE (8*1024)
+static u8  _cmd_data_buffer[DATA_BUFFER_SIZE] __attribute((aligned(64)));
 
 void pbuf_check_transfers(void)
 {
@@ -59,6 +61,28 @@ struct pbuf *pbuf_alloc(pbuf_layer l, u16 size, pbuf_flag flag)
 			buffers[i].next = NULL;
 			buffers[i].len = buffers[i].tot_len = size;
 			buffers[i].id = 0;
+			buffers[i].cb = NULL;
+			buffers[i].cb_arg = NULL;
+			return &buffers[i];
+		}
+	}
+	return NULL;
+}
+
+struct pbuf *pbuf_alloc2(pbuf_layer l, u8 * buffer, u16 size, pbuf_flag flag, block_done_callback cb, void *cb_arg)
+{
+	int i;
+
+	pbuf_check_transfers();
+	for (i = 0; i < NUMBER_OF_BUFFERS; i++) {
+		if (buffers[i].ref == 0) {
+			buffers[i].ref++;
+			buffers[i].payload = buffer;
+			buffers[i].next = NULL;
+			buffers[i].len = buffers[i].tot_len = size;
+			buffers[i].id = 0;
+			buffers[i].cb = cb;
+			buffers[i].cb_arg = cb_arg;
 			return &buffers[i];
 		}
 	}
@@ -108,6 +132,8 @@ void *rpcCommandHandler(u32 command, void *buffer, int size)
 				ee_buffer_pos = 0;
 				ee_buffer_size = buf[1] - offset;
 			}
+			buf[1] = (u32)_cmd_data_buffer;
+			buf[2] = DATA_BUFFER_SIZE;
 			break;
 		}
 
@@ -146,22 +172,64 @@ void rpcMainThread(void* param)
 	SifRpcLoop(&rpc_queue);
 }
 
+#define CMD_SMAP_RW 0x17 // is this CMD number free?
+struct ps2_smap_cmd_rw {
+	struct t_SifCmdHeader sifcmd;
+	u32 write;
+	u32 addr;
+	u32 size;
+	u32 callback;
+	u32 spare[16-4];
+};
+
+static void
+_cmd_transfer_callback(void *arg)
+{
+	static struct ps2_smap_cmd_rw cmd_reply __attribute__((aligned(64)));
+
+	//printf("smaprpc: cmd done\n");
+
+	/* Send CMD */
+	//cmd_reply.write    = cmd->write;
+	//cmd_reply.addr     = cmd->addr;
+	//cmd_reply.size     = cmd->size;
+	//cmd_reply.callback = cmd->callback;
+	isceSifSendCmd(CMD_SMAP_RW, &cmd_reply, sizeof(struct ps2_smap_cmd_rw), NULL, NULL, 0);
+}
+
+static void
+_cmd_handle(void *data, void *harg)
+{
+	struct ps2_smap_cmd_rw *cmd = data;
+	struct pbuf *pBuf;
+
+	//printf("smaprpc: cmd received (%lu, %lu, %lu)\n", cmd->write, cmd->addr, cmd->size);
+
+	pBuf=(struct pbuf*)pbuf_alloc2(PBUF_RAW, (void *)cmd->addr, cmd->size, PBUF_POOL, _cmd_transfer_callback, NULL);
+	if (pBuf != NULL) {
+		SMapLowLevelOutput(pBuf);
+	} else {
+		printf("Failed to allocate PBuf.\n");
+	}
+}
+
 int rpc_start(void)
 {
 	iop_thread_t param;
 	int th;
 
 	/*create thread*/
-	param.attr         = TH_C;
-	param.thread     = rpcMainThread;
-	param.priority = 40;
-	param.stacksize    = 0x8000;
-	param.option      = 0;
+	param.attr      = TH_C;
+	param.thread    = rpcMainThread;
+	param.priority  = 40;
+	param.stacksize = 0x8000;
+	param.option    = 0;
 
 
 	th = CreateThread(&param);
 	if (th > 0) {
 		StartThread(th,0);
+		sceSifAddCmdHandler(CMD_SMAP_RW, _cmd_handle, NULL);
 		return 0;
 	} else  {
 		printf("Failed to create rpx thread.\n");

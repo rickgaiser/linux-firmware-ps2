@@ -54,7 +54,9 @@ I_sceSifInitRpc
 I_sceSifSetRpcQueue 
 I_sceSifRegisterRpc 
 I_sceSifRpcLoop
+I_sceSifAddCmdHandler
 I_sceSifSendCmd
+I_isceSifSendCmd
 sifcmd_IMPORTS_end
 
 sifman_IMPORTS_start

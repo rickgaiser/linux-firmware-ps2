@@ -39,13 +39,10 @@ IRX_ID("smaprpc", 1, 0);
 
 #define	TIMER_INTERVAL		(100*1000)
 #define	TIMEOUT				(300*1000)
-#define	MAX_REQ_CNT			8
+#define	MAX_REQ_CNT			64
 #define NR_OF_SMAP_RX_MSGS 16
 
 
-static int		iSendMutex;
-static int		iSendReqMutex;
-static int		iSendReq=-1;
 static int 		iReqNR=0;
 static int 		iReqCNT=0;
 static PBuf*	apReqQueue[MAX_REQ_CNT];
@@ -99,6 +96,12 @@ AddToQueue(PBuf* pBuf)
 		Ret=SMap_Send(pBuf);
 
 		//Did a TX-resource exhaustion occur?
+
+		if	(Ret==SMap_OK)
+		{
+			if (pBuf->cb != NULL)
+				pBuf->cb(pBuf->cb_arg);
+		}
 
 		if	(Ret==SMap_TX)
 		{
@@ -182,6 +185,9 @@ SendRequests(void)
 		//an important package and ps2ip won't receive an ack, it'll resend the package. We are done with pReq and should invoke
 		//pbuf_free to decrease the ref-count.
 
+		if (pReq->cb != NULL)
+			pReq->cb(pReq->cb_arg);
+
 		pbuf_free(pReq);
 
 		//pReq has been sent, advance the queue-index one step.
@@ -200,17 +206,6 @@ QueueHandler(void)
 	//and signals any waiting thread if the queue becomes non-full. Start with trying to send the reqs.
 
 	SendRequests();
-
-	//Is there a thread waiting for the queue to become non-full?
-
-	if	(iSendReq!=-1)
-	{
-
-		//Yes, send it a signal that it should try to add to the queue now.
-
-		iSignalSema(iSendReq);
-		iSendReq=-1;
-	}
 }
 
 
@@ -314,71 +309,30 @@ DetectAndInitDev9(void)
 static err_t
 Send(PBuf* pBuf)
 {
+	SMapStatus Res;
 
-	//Send the packet in pBuf.
+	//Try to add the packet to the request-queue.
 
-	while	(1)
+	if ((Res=AddToQueue(pBuf))==SMap_OK)
 	{
-		int			iFlags;
-		SMapStatus	Res;
 
-		//Try to add the packet to the request-queue.
+		//The packet was sent successfully or added to the queue, return ERR_OK.
 
-		if	((Res=AddToQueue(pBuf))==SMap_OK)
-		{
+		return	ERR_OK;
+	}
+	else if (Res==SMap_Err)
+	{
 
-			//The packet was sent successfully or added to the queue, return ERR_OK.
+		//SMap_Send wasn't able to send the packet due to some hardware limitation, return ERR_IF to indicate that.
 
-			return	ERR_OK;
-		}
-		else if	(Res==SMap_Err)
-		{
+		return	ERR_IF;
+	}
+	else //if (Res==SMap_Con)
+	{
 
-			//SMap_Send wasn't able to send the packet due to some hardware limitation, return ERR_IF to indicate that.
+		//SMap_Send wasn't able to send the packet due to not being connected, return ERR_CONN to indicate that.
 
-			return	ERR_IF;
-		}
-		else if	(Res==SMap_Con)
-		{
-
-			//SMap_Send wasn't able to send the packet due to not being connected, return ERR_CONN to indicate that.
-
-			return	ERR_CONN;
-		}
-
-		//The request-queue is full. If iSendReq is assigned a mutex-id when an TX-interrupt occur, SMapInterrupt will signal that
-		//mutex when there is room in the queue. Due to synchronization issues, we must first acquire the iSendMutex before we can
-		//assign iSendReq.
-
-		WaitSema(iSendMutex);
-
-		//There is a possibility that the queue has become non-full during the acquisition of the mutex. Verify that it still is
-		//full.
-
-		CpuSuspendIntr(&iFlags);
-		if	(iReqCNT==MAX_REQ_CNT)
-		{
-
-			//It's still full. Assign iSendReqMutex to iSendReq.
-
-			iSendReq=iSendReqMutex;
-			CpuResumeIntr(iFlags);
-
-			//Wait for the SMapInterrupt to signal us.
-
-			WaitSema(iSendReqMutex);
-		}
-		else
-		{
-
-			//The queue isn't full anymore, try to add pBuf to it.
-
-			CpuResumeIntr(iFlags);
-		}
-
-		//Release the iSendMutex
-
-		SignalSema(iSendMutex);
+		return	ERR_CONN;
 	}
 }
 
@@ -453,18 +407,6 @@ SMapInit(void)
 {
 	DetectAndInitDev9();
 	dbgprintf("SMapInit: Dev9 detected & initialized\n");
-
-	if	((iSendMutex=CreateMutex(IOP_MUTEX_UNLOCKED))<0)
-	{
-		printf("SMapInit: Fatal error - unable to create iSendMutex\n");
-		return	0;
-	}
-
-	if	((iSendReqMutex=CreateMutex(IOP_MUTEX_UNLOCKED))<0)
-	{
-		printf("SMapInit: Fatal error - unable to create iSendReqMutex\n");
-		return	0;
-	}
 
 	if	(!SMap_Init())
 	{

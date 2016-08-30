@@ -1,6 +1,7 @@
 #ifndef _PBUF_H_
 #define _PBUF_H_
 
+typedef void (*block_done_callback)(void *arg);
 typedef struct pbuf		PBuf;
 
 struct pbuf {
@@ -33,6 +34,9 @@ struct pbuf {
 
   /** Transfer id of received frame which is sent to the EE. */
   int id;  
+
+  block_done_callback cb;
+  void *cb_arg;
 };
 
 typedef int err_t;
