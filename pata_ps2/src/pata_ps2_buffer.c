@@ -32,7 +32,7 @@ struct buffer_transfer {
 };
 static struct buffer_transfer transfer;
 
-static void _transfer_block(struct buffer_transfer *tr);
+static void _transfer_sectors(struct buffer_transfer *tr);
 
 /*
  * private functions
@@ -63,7 +63,7 @@ _transfer_callback(void *addr, u32 size, void *arg)
 	if (tr->size_left > 0) {
 		tr->state = TRS_WAITING;
 		tr->cb(addr2, tr->size_xfer, tr->cb_arg);
-		_transfer_block(tr);
+		_transfer_sectors(tr);
 	}
 	else {
 		/* Done */
@@ -74,7 +74,7 @@ _transfer_callback(void *addr, u32 size, void *arg)
 }
 
 static void
-_transfer_block(struct buffer_transfer *tr)
+_transfer_sectors(struct buffer_transfer *tr)
 {
 	if (tr->state != TRS_WAITING) {
 		M_ERROR("not waiting!\n");
@@ -87,7 +87,7 @@ _transfer_block(struct buffer_transfer *tr)
 		/*
 		 * When reading, the IOP controls the ring-buffer.
 		 *
-		 * Determine the optimal nr of blocks for transfer:
+		 * Determine the optimal nr of sectors for transfer:
 		 *   Bigger transfers between SPEED<->IOP are better, but
 		 *   if we want the transfer from IOP->EE to run parallel
 		 *   we need to split the transfer.
@@ -156,7 +156,7 @@ pata_ps2_buffer_transfer(void *addr, u32 size, u32 write, block_done_callback cb
 		_data_buffer_pointer = addr;
 
 	dev9LEDCtl(1);
-	_transfer_block(tr);
+	_transfer_sectors(tr);
 }
 
 int
