@@ -49,25 +49,27 @@ _transfer_callback(void *addr, u32 size, void *arg)
 #endif
 {
 	struct buffer_transfer *tr = arg;
+	void *addr2;
 
 	if (tr->state != TRS_TRANSFER) {
 		M_ERROR("not in transfer!\n");
 		return;
 	}
 
-	tr->cb(_data_buffer_pointer, tr->size_xfer, tr->cb_arg);
-
+	addr2 = _data_buffer_pointer;
 	_data_buffer_pointer += tr->size_xfer;
 	tr->size_left -= tr->size_xfer;
+
 	if (tr->size_left > 0) {
-		/* Advance to next transfer */
 		tr->state = TRS_WAITING;
+		tr->cb(addr2, tr->size_xfer, tr->cb_arg);
 		_transfer_block(tr);
 	}
 	else {
 		/* Done */
 		tr->state = TRS_DONE;
 		dev9LEDCtl(0);
+		tr->cb(addr2, tr->size_xfer, tr->cb_arg);
 	}
 }
 
@@ -165,7 +167,7 @@ pata_ps2_buffer_init()
 	tr->state = TRS_DONE;
 
 #ifdef USE_PS2SDK_DEV9
-	dev9RegisterPreDmaCb(0, &AtadPreDmaCb);
+	dev9RegisterPreDmaCb (0, &AtadPreDmaCb);
 	dev9RegisterPostDmaCb(0, &AtadPostDmaCb);
 #endif
 

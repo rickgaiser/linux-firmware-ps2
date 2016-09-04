@@ -68,6 +68,10 @@ stdio_IMPORTS_start
 I_printf
 stdio_IMPORTS_end
 
+sysclib_IMPORTS_start
+I_memcpy
+sysclib_IMPORTS_end
+
 dev9_IMPORTS_start
 I_dev9RegisterIntrCb
 I_dev9DmaTransfer
