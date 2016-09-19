@@ -83,26 +83,9 @@ _transfer_sectors(struct buffer_transfer *tr)
 		return;
 	}
 
-	tr->size_xfer = tr->size_left;
+	tr->size_xfer = min(tr->size_left, MAX_TRANSFER_SIZE);
 
 	if (tr->write == 0) {
-		/*
-		 * When reading, the IOP controls the ring-buffer.
-		 *
-		 * Determine the optimal nr of sectors for transfer:
-		 *   Bigger transfers between SPEED<->IOP are better, but
-		 *   if we want the transfer from IOP->EE to run parallel
-		 *   we need to split the transfer.
-		 */
-		if (tr->size_xfer > MIN_TRANSFER_SIZE) {
-			/* Try to transfer 75% (aligned down), then start transfer to EE */
-			tr->size_xfer = ((tr->size_xfer >> 2) * 3) & ~(512-1);
-			/* But not too small */
-			tr->size_xfer = max(tr->size_xfer, MIN_TRANSFER_SIZE);
-			/* And not too big */
-			tr->size_xfer = min(tr->size_xfer, MAX_TRANSFER_SIZE);
-		}
-
 		/* Reset the ring-buffer if needed */
 		if (DATA_BUFFER_FREE() < tr->size_xfer)
 			DATA_BUFFER_RESET();
