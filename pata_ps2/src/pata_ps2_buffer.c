@@ -133,6 +133,22 @@ static void AtadPostDmaCb(int bcr, int dir)
 }
 #endif
 
+/* ATA command completion interrupt */
+static int _intr_ata0(int flag)
+{
+	dev9IntrDisable(SPD_INTR_ATA0);
+
+	return 1;
+}
+
+/* ATA ??? ready for DMA ??? interrupt */
+static int _intr_ata1(int flag)
+{
+	dev9IntrDisable(SPD_INTR_ATA1);
+
+	return 1;
+}
+
 /*
  * public functions
  */
@@ -141,7 +157,7 @@ pata_ps2_buffer_transfer(void *addr, u32 size, u32 write, block_done_callback cb
 {
 	struct buffer_transfer *tr = &transfer;
 
-	M_DEBUG("%s\n", __func__);
+	M_DEBUG("%s(%lu)\n", __func__, size);
 
 	if (tr->state != TRS_DONE) {
 		M_ERROR("%d != TRS_DONE\n", tr->state);
@@ -176,6 +192,10 @@ pata_ps2_buffer_init()
 	dev9RegisterPreDmaCb (0, &AtadPreDmaCb);
 	dev9RegisterPostDmaCb(0, &AtadPostDmaCb);
 #endif
+
+	dev9IntrDisable(SPD_INTR_ATA0|SPD_INTR_ATA1);
+	dev9RegisterIntrCb(0, &_intr_ata0);
+	dev9RegisterIntrCb(1, &_intr_ata1);
 
 	return 0;
 }
