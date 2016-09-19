@@ -8,12 +8,13 @@
 #include "speedregs.h"
 
 
-#ifndef USE_PS2SDK_DEV9
 struct dev9_transfer {
+	int ctrl;
+ 	int dmactrl;
 	void * addr;
-	u32 size;
+	int bcr;
 	int dir;
-	block_done_callback cb;
+	dev9_dma_done_callback cb;
 	void *cb_arg;
 };
 static struct dev9_transfer transfer;
@@ -28,13 +29,14 @@ _dma_start(struct dev9_transfer *tr)
 	USE_SPD_REGS;
 	volatile iop_dmac_chan_t *dev9_chan = (iop_dmac_chan_t *)DEV9_DMAC_BASE;
 
-	M_DEBUG("DEV9_DMA start (%lub)\n", tr->size);
+	M_DEBUG("%s\n", __func__);
 
 	/* Start DMA transfer: IOP <--> SPEED */
 	SPD_REG16(SPD_R_XFR_CTRL)|=0x80;
-	SPD_REG16(SPD_R_DMA_CTRL) = (SPD_REG16(SPD_R_REV_1)<17)?0x04:0x06;
+	SPD_REG16(SPD_R_DMA_CTRL) = (SPD_REG16(SPD_R_REV_1)<17)?(tr->dmactrl&0x03)|0x04:(tr->dmactrl&0x01)|0x06;
+
 	dev9_chan->madr = (u32)tr->addr;
-	dev9_chan->bcr  = (tr->size << 9)|32;
+	dev9_chan->bcr  = tr->bcr;
 	dev9_chan->chcr = DMAC_CHCR_30|DMAC_CHCR_TR|DMAC_CHCR_CO|(tr->dir & DMAC_CHCR_DR);
 }
 
@@ -42,6 +44,8 @@ static inline void
 _dma_stop()
 {
 	USE_SPD_REGS;
+
+	M_DEBUG("%s\n", __func__);
 
 	SPD_REG16(SPD_R_XFR_CTRL)&=~0x80;
 }
@@ -51,15 +55,16 @@ _dma_intr_handler(void *arg)
 {
 	struct dev9_transfer *tr = arg;
 
-	M_DEBUG("DEV9_DMA compl (%lub)\n", tr->size);
+	M_DEBUG("%s\n", __func__);
 
 	_dma_stop();
 
-	tr->cb(tr->addr, tr->size, tr->cb_arg);
+	/* Call DMA done callback */
+	if (tr->cb != NULL)
+		tr->cb(tr->cb_arg);
 
 	return 1;
 }
-#endif
 
 /*
  * public functions
@@ -69,6 +74,8 @@ pata_ps2_dev9_set_dir(int dir)
 {
 	USE_SPD_REGS;
 	u16 val;
+
+	M_DEBUG("%s\n", __func__);
 
 	/* 0x38 ??: What does this do? this register also holds the number of blocks ready for DMA */
 	SPD_REG16(0x38) = 3;
@@ -83,30 +90,51 @@ pata_ps2_dev9_set_dir(int dir)
 	SPD_REG16(SPD_R_XFR_CTRL) = dir | 0x6;
 }
 
-#ifndef USE_PS2SDK_DEV9
-void
-pata_ps2_dev9_transfer(void *addr, u32 size, u32 write, block_done_callback cb, void *cb_arg)
+int
+pata_ps2_dev9_transfer(int ctrl, void *addr, int bcr, int dir, dev9_dma_done_callback cb, void *cb_arg)
 {
 	struct dev9_transfer *tr = &transfer;
+	int dmactrl;
 
-	tr->addr   = addr;
-	tr->size   = size;
-	tr->dir    = (write == 0) ? DMAC_TO_MEM : DMAC_FROM_MEM;
-	tr->cb     = cb;
-	tr->cb_arg = cb_arg;
+	M_DEBUG("%s\n", __func__);
+
+	switch(ctrl){
+	case 0:
+	case 1:	dmactrl = ctrl;
+		break;
+
+	case 2:
+	case 3:
+		//if (dev9_predma_cbs[ctrl] == NULL)	return -1;
+		//if (dev9_postdma_cbs[ctrl] == NULL)	return -1;
+		dmactrl = (4 << ctrl);
+		break;
+
+	default:
+		return -1;
+	}
+
+	tr->ctrl    = ctrl;
+ 	tr->dmactrl = dmactrl;
+ 	tr->addr    = addr;
+	tr->bcr     = bcr;
+	tr->dir     = dir;
+	tr->cb      = cb;
+	tr->cb_arg  = cb_arg;
 
 	_dma_start(tr);
+
+	return 0;
 }
-#endif
 
 int
 pata_ps2_dev9_init()
 {
-#ifndef USE_PS2SDK_DEV9
+	M_DEBUG("%s\n", __func__);
+
 	/* IOP<->DEV9 DMA completion interrupt */
 	RegisterIntrHandler(IOP_IRQ_DMA_DEV9, 1, _dma_intr_handler, &transfer);
 	EnableIntr(IOP_IRQ_DMA_DEV9);
-#endif
 
 	return 0;
 }

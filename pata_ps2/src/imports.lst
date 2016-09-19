@@ -74,8 +74,6 @@ sysclib_IMPORTS_end
 
 dev9_IMPORTS_start
 I_dev9RegisterIntrCb
-I_dev9DmaTransfer
-I_dev9DmaTransferAsync
 I_dev9IntrEnable
 I_dev9IntrDisable
 I_dev9LEDCtl

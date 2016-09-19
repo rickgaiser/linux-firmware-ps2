@@ -35,7 +35,7 @@ static u8 _rpc_buffer[1024] __attribute((aligned(64)));
 static inline int
 _rpc_get_addr(struct ps2_ata_rpc_get_addr *rpc)
 {
-	M_DEBUG("PATA_PS2_GET_ADDR()\n");
+	M_DEBUG("%s\n", __func__);
 
 	rpc->addr = (u32)_data_buffer;
 	rpc->size = DATA_BUFFER_SIZE;
@@ -46,7 +46,7 @@ _rpc_get_addr(struct ps2_ata_rpc_get_addr *rpc)
 static inline int
 _rpc_set_dir(struct ps2_ata_rpc_set_dir *rpc)
 {
-	M_DEBUG("PATA_PS2_SET_DIR(%lu)\n", rpc->dir);
+	M_DEBUG("%s(%lu)\n", __func__, rpc->dir);
 
 	pata_ps2_dev9_set_dir(rpc->dir);
 
@@ -57,6 +57,8 @@ static void *
 _rpc_cmd_handler(u32 command, void *buffer, int size)
 {
 	int ret;
+
+	M_DEBUG("%s(%lu)\n", __func__, command);
 
 	switch (command) {
 		case PATA_PS2_GET_ADDR: ret = _rpc_get_addr(buffer); break;
@@ -78,6 +80,7 @@ _rpc_thread(void* param)
 {
 	int tid;
 
+	M_DEBUG("%s\n", __func__);
 	M_PRINTF("RPC thread running\n");
 
 	tid = GetThreadId();
@@ -95,6 +98,8 @@ pata_ps2_rpc_init()
 {
 	iop_thread_t param;
 	int th;
+
+	M_DEBUG("%s\n", __func__);
 
 	/*create thread*/
 	param.attr	= TH_C;

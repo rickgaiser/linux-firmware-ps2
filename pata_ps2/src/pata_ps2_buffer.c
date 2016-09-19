@@ -16,7 +16,8 @@ static u8 * _data_buffer_pointer = _data_buffer;
 #define DATA_BUFFER_RESET()	_data_buffer_pointer = _data_buffer
 
 enum{
-	TRS_DONE=0,
+	TRS_INVALID=0,
+	TRS_DONE,
 	TRS_WAITING,	/* Waiting for data to/from ATA */
 	TRS_TRANSFER	/* Transfer in progress */
 };
@@ -40,19 +41,16 @@ static void _transfer_sectors(struct buffer_transfer *tr);
 static inline u32 min(u32 a, u32 b) {return (a<b)?a:b;}
 static inline u32 max(u32 a, u32 b) {return (a>b)?a:b;}
 
-#ifdef USE_PS2SDK_DEV9
 static void
 _transfer_callback(void *arg)
-#else
-static void
-_transfer_callback(void *addr, u32 size, void *arg)
-#endif
 {
 	struct buffer_transfer *tr = arg;
 	void *addr2;
 
+	M_DEBUG("%s\n", __func__);
+
 	if (tr->state != TRS_TRANSFER) {
-		M_ERROR("not in transfer!\n");
+		M_ERROR("%d != TRS_TRANSFER\n", tr->state);
 		return;
 	}
 
@@ -62,22 +60,26 @@ _transfer_callback(void *addr, u32 size, void *arg)
 
 	if (tr->size_left > 0) {
 		tr->state = TRS_WAITING;
-		tr->cb(addr2, tr->size_xfer, tr->cb_arg);
+		if (tr->cb != NULL)
+			tr->cb(addr2, tr->size_xfer, tr->cb_arg);
 		_transfer_sectors(tr);
 	}
 	else {
 		/* Done */
 		tr->state = TRS_DONE;
 		dev9LEDCtl(0);
-		tr->cb(addr2, tr->size_xfer, tr->cb_arg);
+		if (tr->cb != NULL)
+			tr->cb(addr2, tr->size_xfer, tr->cb_arg);
 	}
 }
 
 static void
 _transfer_sectors(struct buffer_transfer *tr)
 {
+	M_DEBUG("%s\n", __func__);
+
 	if (tr->state != TRS_WAITING) {
-		M_ERROR("not waiting!\n");
+		M_ERROR("%d != TRS_WAITING\n", tr->state);
 		return;
 	}
 
@@ -108,11 +110,7 @@ _transfer_sectors(struct buffer_transfer *tr)
 
 	/* Start DMA transfer: IOP <--> SPEED */
 	tr->state = TRS_TRANSFER;
-#ifdef USE_PS2SDK_DEV9
-	dev9DmaTransferAsync(0, _data_buffer_pointer, (tr->size_xfer << 7)|128, (tr->write == 0) ? DMAC_TO_MEM : DMAC_FROM_MEM, _transfer_callback, tr);
-#else
-	pata_ps2_dev9_transfer(_data_buffer_pointer, tr->size_xfer, tr->write, _transfer_callback, tr);
-#endif
+	pata_ps2_dev9_transfer(0, _data_buffer_pointer, (tr->size_xfer << 7)|128, (tr->write == 0) ? DMAC_TO_MEM : DMAC_FROM_MEM, _transfer_callback, tr);
 }
 
 #ifdef USE_PS2SDK_DEV9
@@ -120,12 +118,16 @@ static void AtadPreDmaCb(int bcr, int dir)
 {
 	USE_SPD_REGS;
 
+	M_DEBUG("%s\n", __func__);
+
 	SPD_REG16(SPD_R_XFR_CTRL)|=0x80;
 }
 
 static void AtadPostDmaCb(int bcr, int dir)
 {
 	USE_SPD_REGS;
+
+	M_DEBUG("%s\n", __func__);
 
 	SPD_REG16(SPD_R_XFR_CTRL)&=~0x80;
 }
@@ -139,8 +141,10 @@ pata_ps2_buffer_transfer(void *addr, u32 size, u32 write, block_done_callback cb
 {
 	struct buffer_transfer *tr = &transfer;
 
+	M_DEBUG("%s\n", __func__);
+
 	if (tr->state != TRS_DONE) {
-		M_ERROR("not done!\n");
+		M_ERROR("%d != TRS_DONE\n", tr->state);
 		return;
 	}
 
@@ -163,6 +167,8 @@ int
 pata_ps2_buffer_init()
 {
 	struct buffer_transfer *tr = &transfer;
+
+	M_DEBUG("%s\n", __func__);
 
 	tr->state = TRS_DONE;
 

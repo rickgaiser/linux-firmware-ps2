@@ -49,6 +49,8 @@ _start_sg(struct cmd_transfer *tr)
 {
 	struct ps2_ata_sg *sg;
 
+	M_DEBUG("%s\n", __func__);
+
 	if (tr->sg_index < tr->cmd.sg_count) {
 		/* Not finished */
 
@@ -77,6 +79,8 @@ _cmd_transfer_callback(void *addr, u32 size, void *arg)
 #ifndef SPEED_TEST
 	SifDmaTransfer_t dma;
 
+	M_DEBUG("%s\n", __func__);
+
 	if (tr->cmd.write == 0) {
 		/* Send data only */
 		dma.src  = addr;
@@ -86,6 +90,8 @@ _cmd_transfer_callback(void *addr, u32 size, void *arg)
 		/* FIXME: no isceSifSetDma? */
 		sceSifSetDma(&dma, 1);
 	}
+#else
+	M_DEBUG("%s\n", __func__);
 #endif
 
 	if (tr->size_left > size) {
@@ -109,7 +115,7 @@ _cmd_handle(void *data, void *harg)
 	struct ps2_ata_cmd_rw *cmd = (struct ps2_ata_cmd_rw *)data;
 	struct cmd_transfer *tr = &transfer;
 
-	M_DEBUG("cmd received (sg_count = %d)\n", cmd->sg_count);
+	M_DEBUG("%s(sg_count = %d)\n", __func__, cmd->sg_count);
 
 	/* Once we return from the CMD interrupt, the data will be invalid, so make a copy. */
 	memcpy(&tr->cmd, cmd, sizeof(struct ps2_ata_cmd_rw) + cmd->sg_count * sizeof(struct ps2_ata_sg));
@@ -124,6 +130,8 @@ _cmd_handle(void *data, void *harg)
 int
 pata_ps2_cmd_init()
 {
+	M_DEBUG("%s\n", __func__);
+
 	sceSifAddCmdHandler(CMD_ATA_RW, _cmd_handle, NULL);
 
 	return 0;
