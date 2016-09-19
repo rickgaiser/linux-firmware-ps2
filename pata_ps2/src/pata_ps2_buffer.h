@@ -3,7 +3,7 @@
 
 
 #include "types.h"
-#include "pata_ps2_core.h"
+#include "pata_ps2_dev9.h"
 
 
 /*

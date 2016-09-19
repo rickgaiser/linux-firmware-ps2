@@ -5,7 +5,6 @@
 #include "string.h"
 
 #include "pata_ps2.h"
-#include "pata_ps2_core.h"
 #include "pata_ps2_buffer.h"
 #include "pata_ps2_cmd.h"
 

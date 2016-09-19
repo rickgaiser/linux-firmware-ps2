@@ -1,5 +1,5 @@
 #include "pata_ps2.h"
-#include "pata_ps2_core.h"
+#include "pata_ps2_dev9.h"
 
 #include "intrman.h"
 #include "dmacman.h"
@@ -9,21 +9,21 @@
 
 
 #ifndef USE_PS2SDK_DEV9
-struct core_transfer {
+struct dev9_transfer {
 	void * addr;
 	u32 size;
 	int dir;
 	block_done_callback cb;
 	void *cb_arg;
 };
-static struct core_transfer transfer;
+static struct dev9_transfer transfer;
 
 
 /*
  * private functions
  */
 static inline void
-_dma_start(struct core_transfer *tr)
+_dma_start(struct dev9_transfer *tr)
 {
 	USE_SPD_REGS;
 	volatile iop_dmac_chan_t *dev9_chan = (iop_dmac_chan_t *)DEV9_DMAC_BASE;
@@ -49,7 +49,7 @@ _dma_stop()
 static int
 _dma_intr_handler(void *arg)
 {
-	struct core_transfer *tr = arg;
+	struct dev9_transfer *tr = arg;
 
 	M_DEBUG("DEV9_DMA compl (%lub)\n", tr->size);
 
@@ -65,7 +65,7 @@ _dma_intr_handler(void *arg)
  * public functions
  */
 void
-pata_ps2_core_set_dir(int dir)
+pata_ps2_dev9_set_dir(int dir)
 {
 	USE_SPD_REGS;
 	u16 val;
@@ -85,9 +85,9 @@ pata_ps2_core_set_dir(int dir)
 
 #ifndef USE_PS2SDK_DEV9
 void
-pata_ps2_core_transfer(void *addr, u32 size, u32 write, block_done_callback cb, void *cb_arg)
+pata_ps2_dev9_transfer(void *addr, u32 size, u32 write, block_done_callback cb, void *cb_arg)
 {
-	struct core_transfer *tr = &transfer;
+	struct dev9_transfer *tr = &transfer;
 
 	tr->addr   = addr;
 	tr->size   = size;
@@ -100,7 +100,7 @@ pata_ps2_core_transfer(void *addr, u32 size, u32 write, block_done_callback cb, 
 #endif
 
 int
-pata_ps2_core_init()
+pata_ps2_dev9_init()
 {
 #ifndef USE_PS2SDK_DEV9
 	/* IOP<->DEV9 DMA completion interrupt */

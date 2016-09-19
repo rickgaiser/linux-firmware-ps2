@@ -1,5 +1,5 @@
 #include "pata_ps2.h"
-#include "pata_ps2_core.h"
+#include "pata_ps2_dev9.h"
 #include "pata_ps2_buffer.h"
 
 #include "intrman.h"
@@ -111,7 +111,7 @@ _transfer_sectors(struct buffer_transfer *tr)
 #ifdef USE_PS2SDK_DEV9
 	dev9DmaTransferAsync(0, _data_buffer_pointer, (tr->size_xfer << 7)|128, (tr->write == 0) ? DMAC_TO_MEM : DMAC_FROM_MEM, _transfer_callback, tr);
 #else
-	pata_ps2_core_transfer(_data_buffer_pointer, tr->size_xfer, tr->write, _transfer_callback, tr);
+	pata_ps2_dev9_transfer(_data_buffer_pointer, tr->size_xfer, tr->write, _transfer_callback, tr);
 #endif
 }
 

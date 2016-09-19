@@ -3,7 +3,7 @@
 #include "sifcmd.h"
 
 #include "pata_ps2.h"
-#include "pata_ps2_core.h"
+#include "pata_ps2_dev9.h"
 #include "pata_ps2_buffer.h"
 #include "pata_ps2_cmd.h"
 #include "pata_ps2_rpc.h"
@@ -23,7 +23,7 @@ int _start(int argc, char *argv[])
 	/* FIXME: How can we check if another module has setup a cmd buffer? */
 	sceSifSetCmdBuffer(cmd_buffer, CMD_BUFFER_SIZE);
 
-	if(pata_ps2_core_init() != 0) {
+	if(pata_ps2_dev9_init() != 0) {
 		M_ERROR("failed to init core\n");
 		return 1;
 	}
