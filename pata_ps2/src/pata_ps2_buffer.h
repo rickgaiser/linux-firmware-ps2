@@ -12,13 +12,12 @@
  *
  * The transfer to EE is about 4 times faster, so locking is not needed.
  */
-#define MIN_TRANSFER_SIZE	( 4*1024)
-#define MAX_TRANSFER_SIZE	(16*1024)
-#define DATA_BUFFER_SIZE	(4*MAX_TRANSFER_SIZE)
+#define BUFFER_MAX_TRANSFER_SIZE	(16*1024)
+#define DATA_BUFFER_SIZE		(4*BUFFER_MAX_TRANSFER_SIZE)
 extern u8 _data_buffer[DATA_BUFFER_SIZE];
 
 
-void pata_ps2_buffer_transfer(void *addr, u32 size, u32 write, block_done_callback cb, void *cb_arg);
+void pata_ps2_buffer_read(u32 size, block_done_callback cb, void *cb_arg);
 int  pata_ps2_buffer_init();
 
 

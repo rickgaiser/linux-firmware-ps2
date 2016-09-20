@@ -4,6 +4,7 @@
 
 #include "pata_ps2.h"
 #include "pata_ps2_dev9.h"
+#include "pata_ps2_ata.h"
 #include "pata_ps2_buffer.h"
 #include "pata_ps2_cmd.h"
 #include "pata_ps2_rpc.h"
@@ -24,7 +25,12 @@ int _start(int argc, char *argv[])
 	sceSifSetCmdBuffer(cmd_buffer, CMD_BUFFER_SIZE);
 
 	if(pata_ps2_dev9_init() != 0) {
-		M_ERROR("failed to init core\n");
+		M_ERROR("failed to init dev9\n");
+		return 1;
+	}
+
+	if(pata_ps2_ata_init() != 0) {
+		M_ERROR("failed to init ata\n");
 		return 1;
 	}
 

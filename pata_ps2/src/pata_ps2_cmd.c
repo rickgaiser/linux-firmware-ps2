@@ -6,6 +6,7 @@
 
 #include "pata_ps2.h"
 #include "pata_ps2_buffer.h"
+#include "pata_ps2_ata.h"
 #include "pata_ps2_cmd.h"
 
 
@@ -42,7 +43,7 @@ static struct cmd_transfer transfer __attribute((aligned(64)));
 /*
  * private functions
  */
-static void _cmd_transfer_callback(void *addr, u32 size, void *arg);
+static void _transfer_callback(void *addr, u32 size, void *arg);
 
 static void
 _start_sg(struct cmd_transfer *tr)
@@ -62,7 +63,14 @@ _start_sg(struct cmd_transfer *tr)
 		tr->addr       = (void *)sg->addr;
 		tr->size_left  = sg->size;
 
-		pata_ps2_buffer_transfer((void *)sg->addr, sg->size, tr->cmd.write, _cmd_transfer_callback, tr);
+		if (tr->cmd.write == 0) {
+			/* Read using ring-buffer */
+			pata_ps2_buffer_read(sg->size, _transfer_callback, tr);
+		}
+		else {
+			/* Write directly */
+			pata_ps2_ata_transfer((void *)sg->addr, sg->size, tr->cmd.write, _transfer_callback, tr);
+		}
 	}
 	else {
 		/* Finished */
@@ -73,13 +81,13 @@ _start_sg(struct cmd_transfer *tr)
 }
 
 static void
-_cmd_transfer_callback(void *addr, u32 size, void *arg)
+_transfer_callback(void *addr, u32 size, void *arg)
 {
 	struct cmd_transfer *tr = arg;
 #ifndef SPEED_TEST
 	SifDmaTransfer_t dma;
 
-	M_DEBUG("%s\n", __func__);
+	M_DEBUG("(cmd)%s(%lu, %lu)\n", __func__, addr, size);
 
 	if (tr->cmd.write == 0) {
 		/* Send data only */
@@ -91,7 +99,7 @@ _cmd_transfer_callback(void *addr, u32 size, void *arg)
 		sceSifSetDma(&dma, 1);
 	}
 #else
-	M_DEBUG("%s\n", __func__);
+	M_DEBUG("(cmd)%s(%lu, %lu)\n", __func__, addr, size);
 #endif
 
 	if (tr->size_left > size) {
