@@ -23,7 +23,8 @@ struct ps2_ata_cmd_rw {
 	/* Data: 8 bytes */
 	u32 write:1;
 	u32 callback:1;
-	u32 sg_count:30;
+	u32 ata0_intr:1;
+	u32 sg_count:29;
 	u32 _spare;
 };
 #define MAX_CMD_SIZE (112)
@@ -76,6 +77,7 @@ _start_sg(struct cmd_transfer *tr)
 		/* Finished */
 
 		/* Send CMD */
+		tr->cmd.ata0_intr = 0;
 		isceSifSendCmd(CMD_ATA_RW, (void *)&tr->cmd, sizeof(struct ps2_ata_cmd_rw), NULL, NULL, 0);
 	}
 }
@@ -84,10 +86,18 @@ static void
 _transfer_callback(void *addr, u32 size, void *arg)
 {
 	struct cmd_transfer *tr = arg;
-#ifndef SPEED_TEST
 	SifDmaTransfer_t dma;
 
 	M_DEBUG("(cmd)%s(%lu, %lu)\n", __func__, addr, size);
+
+	/* FIXME: NULL means ATA completion interrupt */
+	if (addr == NULL) {
+		/* Send CMD */
+		tr->cmd.ata0_intr = 1;
+		isceSifSendCmd(CMD_ATA_RW, (void *)&tr->cmd, sizeof(struct ps2_ata_cmd_rw), NULL, NULL, 0);
+
+		return;
+	}
 
 	if (tr->cmd.write == 0) {
 		/* Send data only */
@@ -98,9 +108,6 @@ _transfer_callback(void *addr, u32 size, void *arg)
 		/* FIXME: no isceSifSetDma? */
 		sceSifSetDma(&dma, 1);
 	}
-#else
-	M_DEBUG("(cmd)%s(%lu, %lu)\n", __func__, addr, size);
-#endif
 
 	if (tr->size_left > size) {
 		/* Not finished */

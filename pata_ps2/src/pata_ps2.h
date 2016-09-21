@@ -22,10 +22,5 @@
 #define ATA_DIR_READ		0
 #define ATA_DIR_WRITE		1
 
-/*
- * This will cause all data transfers from IOP->EE to stop
- * so we can test the speed of the HDD->SPEED->IOP transfer
- */
-//#define SPEED_TEST
 
 #endif

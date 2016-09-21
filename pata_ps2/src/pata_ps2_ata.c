@@ -12,8 +12,8 @@
 enum{
 	TRS_INVALID=0,
 	TRS_DONE,
-	TRS_WAITING,	/* Waiting for data to/from ATA */
-	TRS_TRANSFER	/* Transfer in progress */
+	TRS_WAITING,		/* Waiting for data to/from ATA */
+	TRS_TRANSFER		/* Transfer in progress */
 };
 
 struct ata_transfer {
@@ -110,7 +110,22 @@ static void AtadPostDmaCb(int bcr, int dir)
 /* ATA command completion interrupt */
 static int _intr_ata0(int flag)
 {
+	struct ata_transfer *tr = &transfer;
+
 	dev9IntrDisable(SPD_INTR_ATA0);
+
+	/* When writing, the completion interrupt should happen after we are
+	 * done writing data to SPEED
+	 */
+	if (tr->state != TRS_DONE) {
+		M_ERROR("%d != TRS_DONE", tr->state);
+		return 1;
+	}
+
+	if (tr->cb != NULL) {
+		/* FIXME: NULL means ATA completion interrupt */
+		tr->cb(NULL, 0, tr->cb_arg);
+	}
 
 	return 1;
 }
@@ -144,6 +159,10 @@ pata_ps2_ata_transfer(void *addr, u32 size, u32 write, block_done_callback cb, v
 	tr->cb        = cb;
 	tr->cb_arg    = cb_arg;
 	tr->state     = TRS_WAITING;
+
+	/* Enable the ATA completion interrupt when writing */
+	if (tr->write != 0)
+		dev9IntrEnable(SPD_INTR_ATA0);
 
 	dev9LEDCtl(1);
 	_transfer_start(tr);
