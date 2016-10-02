@@ -1,5 +1,6 @@
 #include "irx.h"
 
+#include "sifman.h"
 #include "sifcmd.h"
 
 #include "pata_ps2.h"
@@ -13,16 +14,11 @@
 IRX_ID(MODNAME, 1, 2);
 
 
-#define CMD_BUFFER_SIZE 0x20
-SifCmdHandlerData_t cmd_buffer[CMD_BUFFER_SIZE];
-
-
 int _start(int argc, char *argv[])
 {
+	if (!sceSifCheckInit())
+		sceSifInit();
 	sceSifInitRpc(0);
-
-	/* FIXME: How can we check if another module has setup a cmd buffer? */
-	sceSifSetCmdBuffer(cmd_buffer, CMD_BUFFER_SIZE);
 
 	if(pata_ps2_dev9_init() != 0) {
 		M_ERROR("failed to init dev9\n");

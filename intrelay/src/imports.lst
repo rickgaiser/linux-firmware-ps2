@@ -27,6 +27,7 @@ I_sceSifCheckInit
 sifman_IMPORTS_end
 
 sifcmd_IMPORTS_start
+I_sceSifSetCmdBuffer
 I_sceSifInitRpc
 I_isceSifSendCmd
 I_sceSifSendCmd

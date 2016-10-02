@@ -53,7 +53,7 @@ int intr_usb_handler(void *unused)
 	isceSifSendCmd(SIF_CMD_INTERRUPT, &sifCmdBufferIrq, 64, NULL,
                 NULL, 0);
 #endif
-	
+
 	return 1;
 }
 
@@ -70,7 +70,7 @@ int intr_dev9_handler(void *unused)
 	isceSifSendCmd(SIF_CMD_INTERRUPT, &sifCmdBufferIrq, 64, NULL,
                 NULL, 0);
 #endif
-	
+
 	return 1;
 }
 
@@ -88,7 +88,7 @@ int intr_dev9_handler_dev9(int flag)
 	isceSifSendCmd(SIF_CMD_INTERRUPT, &sifCmdBufferIrq, 64, NULL,
                 NULL, 0);
 #endif
-	
+
 	return 1;
 }
 #endif
@@ -106,7 +106,7 @@ int intr_ilink_handler(void *unused)
 	isceSifSendCmd(SIF_CMD_INTERRUPT, &sifCmdBufferIrq, 64, NULL,
                 NULL, 0);
 #endif
-	
+
 	return 1;
 }
 
@@ -116,6 +116,9 @@ void nullthread(void *unused)
 		SleepThread();
 	}
 }
+
+#define CMD_BUFFER_SIZE 0x20
+SifCmdHandlerData_t cmd_buffer[CMD_BUFFER_SIZE];
 
 int _start(int argc, char *argv[])
 {
@@ -129,8 +132,13 @@ int _start(int argc, char *argv[])
 	sceSifInitRpc(0);
 #endif
 
+	/* Place CMD buffer here because this module is the first to load on all PS2 models */
+	sceSifSetCmdBuffer(cmd_buffer, CMD_BUFFER_SIZE);
+
 	if ((res = RegisterIntrHandler(IOP_IRQ_DEV9, 1, intr_dev9_handler, NULL))) {
+#ifndef DEV9_SUPPORT
 		printf("intr 0x%02x, error %d\n", IOP_IRQ_DEV9, res);
+#endif
 		locked |= 1 << IOP_IRQ_DEV9;
 
 #ifdef DEV9_SUPPORT
