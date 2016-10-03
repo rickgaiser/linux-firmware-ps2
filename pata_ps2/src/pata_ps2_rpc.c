@@ -1,5 +1,5 @@
 #include "pata_ps2.h"
-#include "pata_ps2_dev9.h"
+#include "pata_ps2_ata.h"
 #include "pata_ps2_buffer.h"
 #include "pata_ps2_rpc.h"
 
@@ -48,7 +48,7 @@ _rpc_set_dir(struct ps2_ata_rpc_set_dir *rpc)
 {
 	M_DEBUG("%s(%lu)\n", __func__, rpc->dir);
 
-	pata_ps2_dev9_set_dir(rpc->dir);
+	pata_ps2_ata_set_dir(rpc->dir);
 
 	return 0;
 }

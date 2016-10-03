@@ -142,6 +142,27 @@ static int _intr_ata1(int flag)
  * public functions
  */
 void
+pata_ps2_ata_set_dir(int dir)
+{
+	USE_SPD_REGS;
+	u16 val;
+
+	M_DEBUG("%s\n", __func__);
+
+	/* 0x38 ??: What does this do? this register also holds the number of blocks ready for DMA */
+	SPD_REG16(0x38) = 3;
+
+	/* IF_CTRL: Save first bit (0=MWDMA, 1=UDMA) */
+	val = SPD_REG16(SPD_R_IF_CTRL) & 1;
+	/* IF_CTRL: Set direction */
+	val |= (dir == ATA_DIR_WRITE) ? 0x4c : 0x4e;
+	SPD_REG16(SPD_R_IF_CTRL) = val;
+
+	/* XFR_CTRL: Set direction */
+	SPD_REG16(SPD_R_XFR_CTRL) = dir | 0x6;
+}
+
+void
 pata_ps2_ata_transfer(void *addr, u32 size, u32 write, block_done_callback cb, void *cb_arg)
 {
 	struct ata_transfer *tr = &transfer;
