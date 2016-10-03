@@ -22,8 +22,8 @@ install:
 	cp intrelay/bin/intrelay-dev9-rpc.irx	compiled_irx/
 	cp intrelay/bin/intrelay-direct.irx	compiled_irx/
 	cp intrelay/bin/intrelay-direct-rpc.irx	compiled_irx/
-	cp smaprpc/smaprpc.irx			compiled_irx/
-	cp eedebug/eedebug.irx			compiled_irx/
+	cp smaprpc/bin/smaprpc.irx		compiled_irx/
+	cp eedebug/bin/eedebug.irx		compiled_irx/
 	cp pata_ps2/bin/pata_ps2.irx		compiled_irx/
 	cp compiled_irx/*.irx			../linux/firmware/ps2/
 	cp compiled_irx/ps2sdk/*.irx		../linux/firmware/ps2/

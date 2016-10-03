@@ -1,29 +1,25 @@
-#  _____     ___ ____
-#   ____|   |    ____|      PSX2 OpenSource Project
-#  |     ___|   |____       (C)2002, David Ryan ( Oobles@hotmail.com )
-#                           (C)2003, adresd     ( adresd_ps2dev@yahoo.com )
-#  ------------------------------------------------------------------------
+# _____     ___ ____     ___ ____
+#  ____|   |    ____|   |        | |____|
+# |     ___|   |____ ___|    ____| |    \    PS2DEV Open Source Project.
+#-----------------------------------------------------------------------
+# Copyright 2001-2004.
+# Licenced under Academic Free License version 2.0
+# Review ps2sdk README & LICENSE files for further details.
 
+IOP_OBJS_DIR = obj/
+IOP_BIN_DIR = bin/
+IOP_SRC_DIR = src/
 
-IOP_BIN = smaprpc.irx
-IOP_OBJS = main.o smap.o smap_rpc.o imports.o
+IOP_BIN  = $(IOP_BIN_DIR)smaprpc.irx
+IOP_MODS = main smap smap_rpc imports
+IOP_OBJS = $(addsuffix .o, $(addprefix $(IOP_OBJS_DIR), $(IOP_MODS)))
+IOP_INCS = -I$(PS2SDK)/iop/include
 
-ifeq ($(DEBUG),1)
-DEBUG_FLAGS = -DDEBUG
-endif
-
-IOP_INCS += -I$(PS2SDK)/iop/include
-IOP_CFLAGS += -Wall -fno-builtin $(DEBUG_FLAGS)
-IOP_LDFLAGS += -s
-
-install: all
-	cp $(IOP_BIN) ../loader
-
-all: $(IOP_BIN)
+all: $(IOP_OBJS_DIR) $(IOP_BIN_DIR) $(IOP_BIN)
 
 clean:
-	-rm -f *.o $(IOP_BIN)
+	rm -f -r $(IOP_OBJS_DIR) $(IOP_BIN_DIR)
 
-include $(PS2SDK)/Defs.make
-include Rules.make
-
+include $(PS2SDKSRC)/Defs.make
+include $(PS2SDKSRC)/iop/Rules.make
+include $(PS2SDKSRC)/iop/Rules.release
