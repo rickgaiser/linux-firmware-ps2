@@ -1,62 +1,44 @@
 #ifndef _PBUF_H_
 #define _PBUF_H_
 
+
+#include "types.h"
+#include "smap_cmd.h"
+#include "smap_dma.h"
+
+
 typedef void (*block_done_callback)(void *arg);
-typedef struct pbuf		PBuf;
 
-struct pbuf {
-  /** next pbuf in singly linked pbuf chain */
-  struct pbuf *next;
+typedef struct pbuf {
+	/** pointer to the actual data in the buffer */
+	void *payload;
 
-  /** pointer to the actual data in the buffer */
-  void *payload;
-  
-  /**
-   * total length of this buffer and all next buffers in chain
-   * invariant: p->tot_len == p->len + (p->next? p->next->tot_len: 0)
-   */
-  u16 tot_len;
+	/* length of this buffer */
+	u16 len;
 
-  /* length of this buffer */
-  u16 len;  
+	/**
+	* the reference count always equals the number of pointers
+	* that refer to this pbuf.
+	*/
+	u16 ref;
 
-#if 0  
-  /* flags telling the type of pbuf */
-  u16 flags;
-#endif
-  
-  /**
-   * the reference count always equals the number of pointers
-   * that refer to this pbuf. This can be pointers from an application,
-   * the stack itself, or pbuf->next pointers from a chain.
-   */
-  u16 ref;
+	/** Transfer id of received frame which is sent to the EE. */
+	int id;
 
-  /** Transfer id of received frame which is sent to the EE. */
-  int id;  
+	struct ps2_smap_cmd_rw cmd __attribute__((aligned(64)));
+	struct ps2_smap_sg cmd_sg[MAX_SG_COUNT];
 
-  block_done_callback cb;
-  void *cb_arg;
-};
+	struct smap_dma_transfer smaptr[1];
+
+	block_done_callback cb;
+	void *cb_arg;
+} PBuf;
 
 typedef int err_t;
 
-typedef enum {
-  PBUF_TRANSPORT,
-  PBUF_IP,
-  PBUF_LINK,
-  PBUF_RAW
-} pbuf_layer;
-
-typedef enum {
-  PBUF_RAM,
-  PBUF_ROM,
-  PBUF_REF,
-  PBUF_POOL
-} pbuf_flag;
-
 u8 pbuf_free(struct pbuf *p);
-struct pbuf *pbuf_alloc(pbuf_layer l, u16 size, pbuf_flag flag);
+void pbuf_reset(void);
+struct pbuf *pbuf_alloc(u16 size, block_done_callback cb, void *cb_arg, u8 * buffer);
 void pbuf_check_transfers(void);
 
 #endif

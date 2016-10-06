@@ -13,13 +13,11 @@
 
 /* Please keep these in alphabetical order!  */
 #include "dev9.h"
+#include "dev9_dma.h"
 #include "intrman.h"
-#include "ps2ip.h"
 #include "stdio.h"
 #include "sysclib.h"
 #include "thbase.h"
-#include "thsemap.h"
-#include "thevent.h"
 #include "sifcmd.h"
 #include "sifman.h"
 

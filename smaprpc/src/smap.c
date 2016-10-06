@@ -23,648 +23,311 @@
 #include <sifrpc.h>
 #include <ioman.h>
 #include <sysclib.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <intrman.h>
+#include <loadcore.h>
+#include <dev9.h>
+#include <dmacman.h>
 
+#include "main.h"
 #include "smap.h"
-#include "stddef.h"
-#include "stdio.h"
-#include "sysclib.h"
-#include "intrman.h"
-#include "loadcore.h"
-#include "thbase.h"
-#include "dev9.h"
+#include "smap_eeprom.h"
 #include "smap_rpc.h"
+#include "dev9_dma.h"
 #include "pbuf.h"
 
 
-#define	SET			1
-#define	CLEAR			0
-#define	TRUE			1
-#define	FALSE			0
-#define	ENABLE		1
-#define	DISABLE		0
-#define	START			1
-#define	STOP			0
-#define	RESET_ONLY	1
-#define	RESET_INIT	0
+SMap SMap0;
 
+u8 smap_rx_buffer[SMAP_RX_BUFFER_SIZE] __attribute((aligned(64)));
+static u8 * _data_buffer_pointer = smap_rx_buffer;
+#define DATA_BUFFER_USED()	(_data_buffer_pointer-smap_rx_buffer)
+#define DATA_BUFFER_FREE()	(SMAP_RX_BUFFER_SIZE-DATA_BUFFER_USED())
+#define DATA_BUFFER_RESET()	_data_buffer_pointer = smap_rx_buffer
 
-//Flags
-#define	SMAP_F_OPENED				(1<<0)
-#define	SMAP_F_LINKESTABLISH		(1<<1)
-#define	SMAP_F_LINKVALID			(1<<2)
-#define	SMAP_F_CHECK_FORCE100M	(1<<3)
-#define	SMAP_F_CHECK_FORCE10M	(1<<4)
-#define	SMAP_F_TXDNV_DISABLE		(1<<16)
-#define	SMAP_F_RXDNV_DISABLE		(1<<17)
-#define	SMAP_F_PRINT_PKT			(1<<30)
-#define	SMAP_F_PRINT_MSG			(1<<31)
-
-
-#define	SMAP_TXBUFBASE		0x1000
-#define	SMAP_TXBUFSIZE		(4*1024)
-#define	SMAP_RXBUFBASE		0x4000
-#define	SMAP_RXBUFSIZE		(16*1024)
-
-#define	SMAP_ALIGN					16
-#define	SMAP_TXMAXSIZE				(6+6+2+1500)
-#define	SMAP_TXMAXTAILPAD			4
-#define	SMAP_TXMAXPKTSZ_INFIFO	(SMAP_TXMAXSIZE+2)	//Multiple of 4
-#define	SMAP_RXMAXSIZE				(6+6+2+1500+4)
-#define	SMAP_RXMINSIZE				14							//Ethernet header size
-#define	SMAP_RXMAXTAILPAD			4
-
-#define	SMAP_LOOP_COUNT			10000
-#define	SMAP_AUTONEGO_TIMEOUT	3000
-#define	SMAP_AUTONEGO_RETRY		3
-#define	SMAP_FORCEMODE_WAIT		2000
-#define	SMAP_FORCEMODE_TIMEOUT	1000
-
-
-//Buffer Descriptor(BD) Offset and Definitions
-#define	SMAP_BD_BASE			0x3000
-#define	SMAP_BD_BASE_TX		(SMAP_BD_BASE+0x0000)
-#define	SMAP_BD_BASE_RX		(SMAP_BD_BASE+0x0200)
-#define	SMAP_BD_SIZE			512
-#define	SMAP_BD_MAX_ENTRY		64
-
-#define	SMAP_BD_NEXT(x)	(x)=(x)<(SMAP_BD_MAX_ENTRY-1) ? (x)+1:0
-
-//TX Control
-#define	SMAP_BD_TX_READY		(1<<15)	//set:driver, clear:HW
-#define	SMAP_BD_TX_GENFCS		(1<<9)	//generate FCS
-#define	SMAP_BD_TX_GENPAD		(1<<8)	//generate padding
-#define	SMAP_BD_TX_INSSA		(1<<7)	//insert source address
-#define	SMAP_BD_TX_RPLSA		(1<<6)	//replace source address
-#define	SMAP_BD_TX_INSVLAN	(1<<5)	//insert VLAN Tag
-#define	SMAP_BD_TX_RPLVLAN	(1<<4)	//replace VLAN Tag
-
-//TX Status
-#define	SMAP_BD_TX_READY		(1<<15)	//set:driver, clear:HW
-#define	SMAP_BD_TX_BADFCS		(1<<9)	//bad FCS
-#define	SMAP_BD_TX_BADPKT		(1<<8)	//bad previous pkt in dependent mode
-#define	SMAP_BD_TX_LOSSCR		(1<<7)	//loss of carrior sense
-#define	SMAP_BD_TX_EDEFER		(1<<6)	//excessive deferal
-#define	SMAP_BD_TX_ECOLL		(1<<5)	//excessive collision
-#define	SMAP_BD_TX_LCOLL		(1<<4)	//late collision
-#define	SMAP_BD_TX_MCOLL		(1<<3)	//multiple collision
-#define	SMAP_BD_TX_SCOLL		(1<<2)	//single collision
-#define	SMAP_BD_TX_UNDERRUN	(1<<1)	//underrun
-#define	SMAP_BD_TX_SQE			(1<<0)	//SQE
-#define	SMAP_BD_TX_ERRMASK	(SMAP_BD_TX_BADFCS|SMAP_BD_TX_BADPKT|SMAP_BD_TX_LOSSCR|SMAP_BD_TX_EDEFER|SMAP_BD_TX_ECOLL|	\
-										 SMAP_BD_TX_LCOLL|SMAP_BD_TX_MCOLL|SMAP_BD_TX_SCOLL|SMAP_BD_TX_UNDERRUN|SMAP_BD_TX_SQE)
-
-//RX Control
-#define	SMAP_BD_RX_EMPTY	(1<<15)	//set:driver, clear:HW
-
-//RX Status
-#define	SMAP_BD_RX_EMPTY			(1<<15)	//set:driver, clear:HW
-#define	SMAP_BD_RX_OVERRUN		(1<<9)	//overrun
-#define	SMAP_BD_RX_PFRM			(1<<8)	//pause frame
-#define	SMAP_BD_RX_BADFRM			(1<<7)	//bad frame
-#define	SMAP_BD_RX_RUNTFRM		(1<<6)	//runt frame
-#define	SMAP_BD_RX_SHORTEVNT		(1<<5)	//short event
-#define	SMAP_BD_RX_ALIGNERR		(1<<4)	//alignment error
-#define	SMAP_BD_RX_BADFCS			(1<<3)	//bad FCS
-#define	SMAP_BD_RX_FRMTOOLONG	(1<<2)	//frame too long
-#define	SMAP_BD_RX_OUTRANGE		(1<<1)	//out of range error
-#define	SMAP_BD_RX_INRANGE		(1<<0)	//in range error
-#define	SMAP_BD_RX_ERRMASK		(SMAP_BD_RX_OVERRUN|SMAP_BD_RX_PFRM|SMAP_BD_RX_BADFRM|SMAP_BD_RX_RUNTFRM|SMAP_BD_RX_SHORTEVNT|	\
-											 SMAP_BD_RX_ALIGNERR|SMAP_BD_RX_BADFCS|SMAP_BD_RX_FRMTOOLONG|SMAP_BD_RX_OUTRANGE|					\
-											 SMAP_BD_RX_INRANGE)
-
-
-struct smapbd
-{
-	u16	ctrl_stat;
-	u16	reserved;	//Must be zero
-	u16	length;		//Number of bytes in pkt
-	u16	pointer;
-};
-
-typedef struct smapbd volatile	SMapBD;
-
-
-typedef struct SMapCircularBuffer
-{
-	SMapBD*	pBD;
-	u16		u16PTRStart;
-	u16		u16PTREnd;
-	u8			u8IndexStart;
-	u8			u8IndexEnd;
-	u16		u16Size;
-} SMapCB;
-
-
-typedef struct SMap
-{
-	u32				u32Flags;
-	u8 volatile*	pu8Base;
-	u8					au8HWAddr[6];
-	u32				u32TXMode;
-	u8					u8PPWC;
-	SMapCB			TX;
-	u8					u8RXIndex;
-	u16				u16RXPTR;
-	SMapBD*			pRXBD;
-} SMap;
-
-
-//Register Offset and Definitions
-#define	SMAP_PIOPORT_DIR	0x2C
-#define	SMAP_PIOPORT_IN	0x2E
-#define	SMAP_PIOPORT_OUT	0x2E
-#define	PP_DOUT				(1<<4)	//Data output, read port
-#define	PP_DIN				(1<<5)	//Data input,  write port
-#define	PP_SCLK				(1<<6)	//Clock,       write port
-#define	PP_CSEL				(1<<7)	//Chip select, write port
-//operation code
-#define	PP_OP_READ		2	//2b'10
-#define	PP_OP_WRITE		1	//2b'01
-#define	PP_OP_EWEN		0	//2b'00
-#define	PP_OP_EWDS		0	//2b'00
-
-#define	SMAP_BASE			0xb0000000
-
-#define SPD_R_REV_1                     0x02
-
-#define	SMAP_INTR_STAT		0x28
-#define	SMAP_INTR_CLR		0x128
-#define	SMAP_INTR_ENABLE	0x2A
-#define	SMAP_BD_MODE		0x102
-#define	BD_SWAP				(1<<0)
-
-#define	SMAP_TXFIFO_CTRL			0x1000
-#define	TXFIFO_RESET				(1<<0)
-#define	TXFIFO_DMAEN				(1<<1)
-#define	SMAP_TXFIFO_WR_PTR		0x1004
-#define	SMAP_TXFIFO_SIZE			0x1008
-#define	SMAP_TXFIFO_FRAME_CNT	0x100C
-#define	SMAP_TXFIFO_FRAME_INC	0x1010
-#define	SMAP_TXFIFO_DATA			0x1100
-
-#define	SMAP_RXFIFO_CTRL			0x1030
-#define	RXFIFO_RESET				(1<<0)
-#define	RXFIFO_DMAEN				(1<<1)
-#define	SMAP_RXFIFO_RD_PTR		0x1034
-#define	SMAP_RXFIFO_SIZE			0x1038
-#define	SMAP_RXFIFO_FRAME_CNT	0x103C
-#define	SMAP_RXFIFO_FRAME_DEC	0x1040
-#define	SMAP_RXFIFO_DATA			0x1200
-
-#define	SMAP_FIFO_ADDR		0x1300
-#define	FIFO_CMD_READ		(1<<1)
-#define	FIFO_DATA_SWAP		(1<<0)
-#define	SMAP_FIFO_DATA		0x1308
-
-#define	SMAP_REG8(pSMap,Offset)		(*(u8 volatile*)((pSMap)->pu8Base+(Offset)))
-#define	SMAP_REG16(pSMap,Offset)	(*(u16 volatile*)((pSMap)->pu8Base+(Offset)))
-#define	SMAP_REG32(pSMap,Offset)	(*(u32 volatile*)((pSMap)->pu8Base+(Offset)))
-
-#define	SMAP_EEPROM_WRITE_WAIT		100000
-#define	SMAP_PP_GET_Q(pSMap)			((SMAP_REG8((pSMap),SMAP_PIOPORT_IN)>>4)&1)
-#define	SMAP_PP_SET_D(pSMap,D)		((pSMap)->u8PPWC=(D) ? ((pSMap)->u8PPWC|PP_DIN):((pSMap)->u8PPWC&~PP_DIN))
-#define	SMAP_PP_SET_S(pSMap,S)		((pSMap)->u8PPWC=(S) ? ((pSMap)->u8PPWC|PP_CSEL):((pSMap)->u8PPWC&~PP_CSEL))
-#define	SMAP_PP_CLK_OUT(pSMap,C)	{(pSMap)->u8PPWC=(C) ? ((pSMap)->u8PPWC|PP_SCLK):((pSMap)->u8PPWC&~PP_SCLK);	\
-												 SMAP_REG8((pSMap),SMAP_PIOPORT_OUT)=(pSMap)->u8PPWC;}
-
-//EMAC3 Register Offset and Definitions
-#define	SMAP_EMAC3_BASE	0x2000
-#define	SMAP_EMAC3_MODE0	(SMAP_EMAC3_BASE+0x00)
-#define	E3_RXMAC_IDLE		(1<<31)
-#define	E3_TXMAC_IDLE		(1<<30)
-#define	E3_SOFT_RESET		(1<<29)
-#define	E3_TXMAC_ENABLE	(1<<28)
-#define	E3_RXMAC_ENABLE	(1<<27)
-#define	E3_WAKEUP_ENABLE	(1<<26)
-
-#define	SMAP_EMAC3_MODE1			(SMAP_EMAC3_BASE+0x04)
-#define	E3_FDX_ENABLE				(1<<31)
-#define	E3_INLPBK_ENABLE			(1<<30)	//internal loop back
-#define	E3_VLAN_ENABLE				(1<<29)
-#define	E3_FLOWCTRL_ENABLE		(1<<28)	//integrated flow ctrl(pause frame)
-#define	E3_ALLOW_PF					(1<<27)	//allow pause frame
-#define	E3_ALLOW_EXTMNGIF			(1<<25)	//allow external management IF
-#define	E3_IGNORE_SQE				(1<<24)
-#define	E3_MEDIA_FREQ_BITSFT		(22)
-#define	E3_MEDIA_10M				(0<<22)
-#define	E3_MEDIA_100M				(1<<22)
-#define	E3_MEDIA_1000M				(2<<22)
-#define	E3_MEDIA_MSK				(3<<22)
-#define	E3_RXFIFO_SIZE_BITSFT	(20)
-#define	E3_RXFIFO_512				(0<<20)
-#define	E3_RXFIFO_1K				(1<<20)
-#define	E3_RXFIFO_2K				(2<<20)
-#define	E3_RXFIFO_4K				(3<<20)
-#define	E3_TXFIFO_SIZE_BITSFT	(18)
-#define	E3_TXFIFO_512				(0<<18)
-#define	E3_TXFIFO_1K				(1<<18)
-#define	E3_TXFIFO_2K				(2<<18)
-#define	E3_TXREQ0_BITSFT			(15)
-#define	E3_TXREQ0_SINGLE			(0<<15)
-#define	E3_TXREQ0_MULTI			(1<<15)
-#define	E3_TXREQ0_DEPEND			(2<<15)
-#define	E3_TXREQ1_BITSFT			(13)
-#define	E3_TXREQ1_SINGLE			(0<<13)
-#define	E3_TXREQ1_MULTI			(1<<13)
-#define	E3_TXREQ1_DEPEND			(2<<13)
-#define	E3_JUMBO_ENABLE			(1<<12)
-
-#define	SMAP_EMAC3_TxMODE0	(SMAP_EMAC3_BASE+0x08)
-#define	E3_TX_GNP_0				(1<<31)	//get new packet
-#define	E3_TX_GNP_1				(1<<30)	//get new packet
-#define	E3_TX_GNP_DEPEND		(1<<29)	//get new packet
-#define	E3_TX_FIRST_CHANNEL	(1<<28)
-
-#define	SMAP_EMAC3_TxMODE1		(SMAP_EMAC3_BASE+0x0C)
-#define	E3_TX_LOW_REQ_MSK			(0x1F)	//low priority request
-#define	E3_TX_LOW_REQ_BITSFT		(27)		//low priority request
-#define	E3_TX_URG_REQ_MSK			(0xFF)	//urgent priority request
-#define	E3_TX_URG_REQ_BITSFT		(16)		//urgent priority request
-
-#define	SMAP_EMAC3_RxMODE			(SMAP_EMAC3_BASE+0x10)
-#define	E3_RX_STRIP_PAD			(1<<31)
-#define	E3_RX_STRIP_FCS			(1<<30)
-#define	E3_RX_RX_RUNT_FRAME		(1<<29)
-#define	E3_RX_RX_FCS_ERR			(1<<28)
-#define	E3_RX_RX_TOO_LONG_ERR	(1<<27)
-#define	E3_RX_RX_IN_RANGE_ERR	(1<<26)
-#define	E3_RX_PROP_PF				(1<<25)	//propagate pause frame
-#define	E3_RX_PROMISC				(1<<24)
-#define	E3_RX_PROMISC_MCAST		(1<<23)
-#define	E3_RX_INDIVID_ADDR		(1<<22)
-#define	E3_RX_INDIVID_HASH		(1<<21)
-#define	E3_RX_BCAST					(1<<20)
-#define	E3_RX_MCAST					(1<<19)
-
-#define	SMAP_EMAC3_INTR_STAT		(SMAP_EMAC3_BASE+0x14)
-#define	SMAP_EMAC3_INTR_ENABLE	(SMAP_EMAC3_BASE+0x18)
-#define	E3_INTR_OVERRUN			(1<<25)	//this bit does NOT WORKED
-#define	E3_INTR_PF					(1<<24)
-#define	E3_INTR_BAD_FRAME			(1<<23)
-#define	E3_INTR_RUNT_FRAME		(1<<22)
-#define	E3_INTR_SHORT_EVENT		(1<<21)
-#define	E3_INTR_ALIGN_ERR			(1<<20)
-#define	E3_INTR_BAD_FCS			(1<<19)
-#define	E3_INTR_TOO_LONG			(1<<18)
-#define	E3_INTR_OUT_RANGE_ERR	(1<<17)
-#define	E3_INTR_IN_RANGE_ERR		(1<<16)
-#define	E3_INTR_DEAD_DEPEND		(1<<9)
-#define	E3_INTR_DEAD_0				(1<<8)
-#define	E3_INTR_SQE_ERR_0			(1<<7)
-#define	E3_INTR_TX_ERR_0			(1<<6)
-#define	E3_INTR_DEAD_1				(1<<5)
-#define	E3_INTR_SQE_ERR_1			(1<<4)
-#define	E3_INTR_TX_ERR_1			(1<<3)
-#define	E3_INTR_MMAOP_SUCCESS	(1<<1)
-#define	E3_INTR_MMAOP_FAIL		(1<<0)
-#define	E3_INTR_ALL					(E3_INTR_OVERRUN|E3_INTR_PF|E3_INTR_BAD_FRAME|E3_INTR_RUNT_FRAME|E3_INTR_SHORT_EVENT|	\
-											 E3_INTR_ALIGN_ERR|E3_INTR_BAD_FCS|E3_INTR_TOO_LONG|E3_INTR_OUT_RANGE_ERR|					\
-											 E3_INTR_IN_RANGE_ERR|E3_INTR_DEAD_DEPEND|E3_INTR_DEAD_0| E3_INTR_SQE_ERR_0|				\
-											 E3_INTR_TX_ERR_0|E3_INTR_DEAD_1|E3_INTR_SQE_ERR_1|E3_INTR_TX_ERR_1|							\
-											 E3_INTR_MMAOP_SUCCESS|E3_INTR_MMAOP_FAIL)
-#define	E3_DEAD_ALL					(E3_INTR_DEAD_DEPEND|E3_INTR_DEAD_0| E3_INTR_DEAD_1)
-
-#define	SMAP_EMAC3_ADDR_HI	(SMAP_EMAC3_BASE+0x1C)
-#define	SMAP_EMAC3_ADDR_LO	(SMAP_EMAC3_BASE+0x20)
-
-#define	SMAP_EMAC3_VLAN_TPID		(SMAP_EMAC3_BASE+0x24)
-#define	E3_VLAN_ID_MSK				0xFFFF
-
-#define	SMAP_EMAC3_VLAN_TCI	(SMAP_EMAC3_BASE+0x28)
-#define	E3_VLAN_TCITAG_MSK	0xFFFF
-
-#define	SMAP_EMAC3_PAUSE_TIMER		(SMAP_EMAC3_BASE+0x2C)
-#define	E3_PTIMER_MSK					0xFFFF
-
-#define	SMAP_EMAC3_INDIVID_HASH1	(SMAP_EMAC3_BASE+0x30)
-#define	SMAP_EMAC3_INDIVID_HASH2	(SMAP_EMAC3_BASE+0x34)
-#define	SMAP_EMAC3_INDIVID_HASH3	(SMAP_EMAC3_BASE+0x38)
-#define	SMAP_EMAC3_INDIVID_HASH4	(SMAP_EMAC3_BASE+0x3C)
-#define	SMAP_EMAC3_GROUP_HASH1		(SMAP_EMAC3_BASE+0x40)
-#define	SMAP_EMAC3_GROUP_HASH2		(SMAP_EMAC3_BASE+0x44)
-#define	SMAP_EMAC3_GROUP_HASH3		(SMAP_EMAC3_BASE+0x48)
-#define	SMAP_EMAC3_GROUP_HASH4		(SMAP_EMAC3_BASE+0x4C)
-#define	E3_HASH_MSK						0xFFFF
-
-#define	SMAP_EMAC3_LAST_SA_HI		(SMAP_EMAC3_BASE+0x50)
-#define	SMAP_EMAC3_LAST_SA_LO		(SMAP_EMAC3_BASE+0x54)
-
-#define	SMAP_EMAC3_INTER_FRAME_GAP		(SMAP_EMAC3_BASE+0x58)
-#define	E3_IFGAP_MSK						0x3F
-
-#define	SMAP_EMAC3_STA_CTRL		(SMAP_EMAC3_BASE+0x5C)
-#define	E3_PHY_DATA_MSK			(0xFFFF)
-#define	E3_PHY_DATA_BITSFT		(16)
-#define	E3_PHY_OP_COMP				(1<<15)	//operation complete
-#define	E3_PHY_ERR_READ			(1<<14)
-#define	E3_PHY_STA_CMD_BITSFT	(12)
-#define	E3_PHY_READ					(1<<12)
-#define	E3_PHY_WRITE				(2<<12)
-#define	E3_PHY_OPBCLCK_BITSFT	(10)
-#define	E3_PHY_50M					(0<<10)
-#define	E3_PHY_66M					(1<<10)
-#define	E3_PHY_83M					(2<<10)
-#define	E3_PHY_100M					(3<<10)
-#define	E3_PHY_ADDR_MSK			(0x1F)
-#define	E3_PHY_ADDR_BITSFT		(5)
-#define	E3_PHY_REG_ADDR_MSK		(0x1F)
-
-#define	SMAP_EMAC3_TX_THRESHOLD		(SMAP_EMAC3_BASE+0x60)
-#define	E3_TX_THRESHLD_MSK			(0x1F)
-#define	E3_TX_THRESHLD_BITSFT		(27)
-
-#define	SMAP_EMAC3_RX_WATERMARK		(SMAP_EMAC3_BASE+0x64)
-#define	E3_RX_LO_WATER_MSK			(0x1FF)
-#define	E3_RX_LO_WATER_BITSFT		(23)
-#define	E3_RX_HI_WATER_MSK			(0x1FF)
-#define	E3_RX_HI_WATER_BITSFT		(7)
-
-#define	SMAP_EMAC3_TX_OCTETS		(SMAP_EMAC3_BASE+0x68)
-#define	SMAP_EMAC3_RX_OCTETS		(SMAP_EMAC3_BASE+0x6C)
-
-
-//PHY Register Offset
-#define	NS_OUI				0x080017
-#define	DsPHYTER_ADDRESS	0x1
-#define	DsPHYTER_BMCR		0x00
-#define	PHY_BMCR_RST		(1<<15)		//ReSeT
-#define	PHY_BMCR_LPBK		(1<<14)		//LooPBacK
-#define	PHY_BMCR_100M		(1<<13)		//speed select, 1:100M, 0:10M
-#define	PHY_BMCR_10M		(0<<13)		//speed select, 1:100M, 0:10M
-#define	PHY_BMCR_ANEN		(1<<12)		//Auto-Negotiation ENable
-#define	PHY_BMCR_PWDN		(1<<11)		//PoWer DowN
-#define	PHY_BMCR_ISOL		(1<<10)		//ISOLate
-#define	PHY_BMCR_RSAN		(1<<9)		//ReStart Auto-Negotiation
-#define	PHY_BMCR_DUPM		(1<<8)		//DUPlex Mode, 1:FDX, 0:HDX
-#define	PHY_BMCR_COLT		(1<<7)		//COLlision Test
-#define	DsPHYTER_BMSR		0x01
-#define	PHY_BMSR_ANCP		(1<<5)		//Auto-Negotiation ComPlete
-#define	PHY_BMSR_LINK		(1<<2)		//LINK status
-#define	DsPHYTER_PHYIDR1	0x02
-#define	PHY_IDR1_VAL		(((NS_OUI<<2)>>8)&0xffff)
-#define	DsPHYTER_PHYIDR2	0x03
-#define	PHY_IDR2_VMDL		0x2			//Vendor MoDeL number
-#define	PHY_IDR2_VAL		(((NS_OUI<<10)&0xFC00)|((PHY_IDR2_VMDL<<4)&0x3F0))
-#define	PHY_IDR2_MSK		0xFFF0
-
-#define	DsPHYTER_ANAR			0x04
-#define	DsPHYTER_ANLPAR		0x05
-#define	DsPHYTER_ANLPARNP		0x05
-#define	DsPHYTER_ANER			0x06
-#define	DsPHYTER_ANNPTR		0x07
-//Extended registers
-#define	DsPHYTER_PHYSTS		0x10
-#define	PHY_STS_REL				(1<<13)	//Receive Error Latch
-#define	PHY_STS_POST			(1<<12)	//POlarity STatus
-#define	PHY_STS_FCSL			(1<<11)	//False Carrier Sense Latch
-#define	PHY_STS_SD				(1<<10)	//100BT unconditional Signal Detect
-#define	PHY_STS_DSL				(1<<9)	//100BT DeScrambler Lock
-#define	PHY_STS_PRCV			(1<<8)	//Page ReCeiVed
-#define	PHY_STS_RFLT			(1<<6)	//Remote FauLT
-#define	PHY_STS_JBDT			(1<<5)	//JaBber DetecT
-#define	PHY_STS_ANCP			(1<<4)	//Auto-Negotiation ComPlete
-#define	PHY_STS_LPBK			(1<<3)	//LooPBacK status
-#define	PHY_STS_DUPS			(1<<2)	//DUPlex Status,1:FDX,0:HDX
-#define	PHY_STS_FDX				(1<<2)	//Full Duplex
-#define	PHY_STS_HDX				(0<<2)	//Half Duplex
-#define	PHY_STS_SPDS			(1<<1)	//SpeeD Status
-#define	PHY_STS_10M				(1<<1)	//10Mbps
-#define	PHY_STS_100M			(0<<1)	//100Mbps
-#define	PHY_STS_LINK			(1<<0)	//LINK status
-#define	DsPHYTER_FCSCR			0x14
-#define	DsPHYTER_RECR			0x15
-#define	DsPHYTER_PCSR			0x16
-#define	DsPHYTER_PHYCTRL		0x19
-#define	DsPHYTER_10BTSCR		0x1A
-#define	DsPHYTER_CDCTRL		0x1B
-
-
-extern void		SMapLowLevelInput(struct pbuf* pBuf);
-
-static SMap		SMap0;
-
-static u32	au32TXBuf[(SMAP_TXMAXSIZE+SMAP_TXMAXTAILPAD+3)/4];
 
 /*--------------------------------------------------------------------------*/
 
-static void		ClearAllIRQs(SMap* pSMap);
-static void		TXRXEnable(SMap* pSMap,int iEnable);
-static void		TXBDInit(SMap* pSMap);
-static void		RXBDInit(SMap* pSMap);
-static int		ReadPhy(SMap* pSMap,u32 phyadr,u32 regadr);
-static int		WritePhy(SMap* pSMap,u32 phyadr,u32 regadr,u16 data);
-static int		FIFOReset(SMap* pSMap);
-static void		RegInit(SMap* pSMap);
-static int		EMAC3SoftReset(SMap* pSMap);
-static void		EMAC3SetDefValue(SMap* pSMap);
-static void		EMAC3Init(SMap* pSMap,int iReset);
-static void		EMAC3ReInit(SMap* pSMap);
-static int		PhyInit(SMap* pSMap,int iReset);
-static int		PhyReset(SMap* pSMap);
-static int		AutoNegotiation(SMap* pSMap,int iEnableAutoNego);
-static int		ConfirmAutoNegotiation(SMap* pSMap);
-static void		ForceSPD100M(SMap* pSMap);
-static void		ForceSPD10M(SMap* pSMap);
-static void		ConfirmForceSPD(SMap* pSMap);
-static void		PhySetDSP(SMap* pSMap);
-static void		Reset(SMap* pSMap,int iReset);
-static void		PrintMACAddress(SMap const* pSMap);
-static int		GetNodeAddr(SMap* pSMap);
-static void		BaseInit(SMap* pSMap);
+static void ClearAllIRQs(SMap* pSMap);
+static void TXRXEnable(SMap* pSMap);
+static void TXRXDisable(SMap* pSMap);
+static void TXBDInit(SMap* pSMap);
+static void RXBDInit(SMap* pSMap);
+static int  FIFOReset(SMap* pSMap);
+static int  EMAC3SoftReset(SMap* pSMap);
+static void EMAC3SetDefValue(SMap* pSMap);
+static void EMAC3Init(SMap* pSMap);
+static void Reset(SMap* pSMap);
+static void PrintMACAddress(SMap const* pSMap);
+static int  GetNodeAddr(SMap* pSMap);
+static void BaseInit(SMap* pSMap);
+static int  HandleRX(SMap* pSMap);
 
 /*--------------------------------------------------------------------------*/
-
-static inline u32
-EMAC3REG_READ(SMap* pSMap,u32 u32Offset)
-{
-	u32	hi=SMAP_REG16(pSMap,u32Offset);
-	u32	lo=SMAP_REG16(pSMap,u32Offset+2);
-	return	(hi<<16)|lo;
-}
-
-
-static inline void
-EMAC3REG_WRITE(SMap* pSMap,u32 u32Offset,u32 u32V)
-{
-	SMAP_REG16(pSMap,u32Offset)=((u32V>>16)&0xFFFF);
-	SMAP_REG16(pSMap,u32Offset+2)=(u32V&0xFFFF);
-}
 
 
 static u16
 ComputeFreeSize(SMapCB const* pCB)
 {
-
 	//Compute and return the number of free bytes in pCB.
+	u16 u16Start = pCB->u16PTRStart;
+	u16 u16End   = pCB->u16PTREnd;
 
-	u16	u16Start=pCB->u16PTRStart;
-	u16	u16End=pCB->u16PTREnd;
-
-	return	u16Start>u16End ? (pCB->u16Size+u16End-u16Start):(pCB->u16Size-(u16End-u16Start));
+	return (u16Start > u16End) ? (u16Start - u16End) : (pCB->u16Size - (u16End - u16Start));
 }
 
 
 static int
 HandleTXInt(int iIntFlags)
 {
+	SMap* pSMap = &SMap0;
+	int iNoError = 1;
 
-	//Iterate through the active (inprogress) index-range until we find a non-complete BD.
+	//M_DEBUG("%s\n", __func__);
 
-	SMap*		pSMap=&SMap0;
-	int		iNoError=1;
+	while (pSMap->TX.u8IndexStart != pSMap->TX.u8IndexEnd) {
+		SMapBD*	pBD = &pSMap->TX.pBD[pSMap->TX.u8IndexStart];
+		int iStatus = pBD->ctrl_stat;
 
-	while	(pSMap->TX.u8IndexStart!=pSMap->TX.u8IndexEnd)
-	{
+		if (iStatus & SMAP_BD_TX_ERRMASK)
+			iNoError = 0;
 
-		//Has the buffer been sent yet?
+		if (iStatus & SMAP_BD_TX_READY)
+			return iNoError;
 
-		SMapBD*	pBD=&pSMap->TX.pBD[pSMap->TX.u8IndexStart];
-		int		iStatus=pBD->ctrl_stat;
-
-		if	(iStatus&SMAP_BD_TX_ERRMASK)
-		{
-			iNoError=0;
-		}
-		if	(iStatus&SMAP_BD_TX_READY)
-		{
-
-			//No, exit!
-
-			return	iNoError;
-		}
-
-		//Yes, the buffer is sent. Update the start of the active-range (inprogress).
-
-		pSMap->TX.u16PTRStart=(pSMap->TX.u16PTRStart+((pBD->length+3)&~3))%SMAP_TXBUFSIZE;
+		// The buffer is sent. Update the start of the active-range (inprogress).
+		pSMap->TX.u16PTRStart = (pSMap->TX.u16PTRStart + ((pBD->length + 3) & ~3)) % SMAP_TXBUFSIZE;
 		SMAP_BD_NEXT(pSMap->TX.u8IndexStart);
 
 		//Clear BD.
-
-		pBD->length=0;
-		pBD->pointer=0;
-		pBD->ctrl_stat=0;
+		pBD->length    = 0;
+		pBD->pointer   = 0;
+		pBD->ctrl_stat = 0;
 	}
 
-	//All the buffers have been sent, which means there are no indices in the active-range ie u8IndexStart==u8IndexEnd.
+	if (pSMap->TX.u8IndexStart == pSMap->TX.u8IndexDMA) {
+		if (pSMap->TX.u16PTRStart != pSMap->TX.u16PTREnd) {
+			M_ERROR("%s: u16PTRStart != u16PTREnd, %d != %d\n", __func__, pSMap->TX.u16PTRStart, pSMap->TX.u16PTREnd);
+			pSMap->TX.u16PTRStart = pSMap->TX.u16PTREnd;
+		}
+		iNoError = 2;
+	}
 
-//	pSMap->TX.u8IndexStart=pSMap->TX.u8IndexEnd;
-	pSMap->TX.u16PTRStart=pSMap->TX.u16PTREnd;
-	return	iNoError;
+	return iNoError;
 }
 
 
 static void
-CopyFromFIFO(SMap const* pSMap,struct pbuf* pBuf)
+_rx_smap_done_callback(struct smap_dma_transfer *smaptr, void *arg)
 {
-	u32*	pData=(u32*)pBuf->payload;
-	int	iRXLen=(pBuf->tot_len+3)&~3;
-	int	iA;
+	struct pbuf *pBuf = (struct pbuf *)arg;
+	SMap* pSMap = &SMap0;
 
-	//Set the memory-location in the RX-mem to start reading from.
+	//M_DEBUG("%s\n", __func__);
 
-	SMAP_REG16(pSMap,SMAP_RXFIFO_RD_PTR)=pSMap->u16RXPTR;
+	// Clear BD.
+	SMAP_REG8(pSMap, SMAP_RXFIFO_FRAME_DEC) = 1;
+	pSMap->pRXBD[smaptr->u8Index].ctrl_stat = SMAP_BD_RX_EMPTY;
 
-	//Copy the data in the RX-mem to the pbuf. Note: pBuf has been allocated in PBUF_POOL and pBuf->tot_len+3 < PBUF_POOL_BUFSIZE,
-	//hence it's safe to overwrite the three bytes after pBuf->tot_len.
+	// Disable RX interrupts
+	//SMap_EnableInterrupts(INTR_RXDNV|INTR_RXEND);
 
-	for	(iA=0;iA<iRXLen;iA+=4)
-	{
-		*pData++=SMAP_REG32(pSMap,SMAP_RXFIFO_DATA);
+	//if ((u32)smaptr->addr == pBuf->cmd_sg[pBuf->cmd.sg_count-1].addr) {
+		// Check for more packets
+		//HandleRX(pSMap);
+
+		// Send packets to EE if its the last one
+		SMapLowLevelInput(pBuf);
+	//}
+}
+
+#if 0
+#define LOG_SIZE2 (16*1024)
+void
+log(SMap* pSMap)
+{
+	static int log_bdcount[SMAP_BD_MAX_ENTRY];
+	static int log_count = 0;
+	int bdcount;
+	u8 rxidx;
+
+	rxidx = pSMap->u8RXIndex;
+	for (bdcount = 0; bdcount < SMAP_BD_MAX_ENTRY; bdcount++) {
+		if(pSMap->pRXBD[rxidx].ctrl_stat & SMAP_BD_RX_EMPTY)
+			break;
+		SMAP_BD_NEXT(rxidx);
 	}
+
+	log_bdcount[bdcount]++;
+	log_count++;
+
+	if (log_count >= LOG_SIZE2) {
+		for (log_count = 0; log_count < 12; log_count++)
+			M_DEBUG("LOG[%d]: bdcount=%d\n", log_count, log_bdcount[log_count]);
+		log_count = 0;
+
+		//for (rxidx = 0; rxidx < SMAP_BD_MAX_ENTRY; rxidx++) {
+		//	if (rxidx == pSMap->u8RXIndex)
+		//		M_DEBUG("rxidx[%d]=%d <--\n", rxidx, pSMap->pRXBD[rxidx].ctrl_stat);
+		//	else
+		//		M_DEBUG("rxidx[%d]=%d\n", rxidx, pSMap->pRXBD[rxidx].ctrl_stat);
+		//}
+	}
+}
+#endif
+
+static int
+HandleRX(SMap* pSMap)
+{
+	struct pbuf *pBuf = NULL;
+	SMapBD *pRXBD;
+	int iPKTLen;
+	int iPKTLenAligned;
+	int iStatus;
+	int rv;
+
+	//M_DEBUG("%s\n", __func__);
+	//log(pSMap);
+
+	pRXBD = &pSMap->pRXBD[pSMap->u8RXIndex];
+	iStatus = pRXBD->ctrl_stat;
+
+	if(iStatus & SMAP_BD_RX_EMPTY)
+		return 0;
+
+	iPKTLen = pRXBD->length;
+	iPKTLenAligned = (iPKTLen + 3) & ~3;
+
+	if (iStatus & SMAP_BD_RX_ERRMASK) {
+		M_DEBUG("%s: packet error\n", __func__);
+
+		//Clear BD.
+		SMAP_REG8(pSMap, SMAP_RXFIFO_FRAME_DEC) = 1;
+		pRXBD->ctrl_stat = SMAP_BD_RX_EMPTY;
+
+		//Increase the BD-index.
+		SMAP_BD_NEXT(pSMap->u8RXIndex);
+
+		return -1;
+	}
+
+	if (iPKTLen < SMAP_RXMINSIZE || iPKTLen > SMAP_RXMAXSIZE) {
+		M_DEBUG("%s: packet length invalid (%d)\n", __func__, iPKTLen);
+
+		//Clear BD.
+		SMAP_REG8(pSMap, SMAP_RXFIFO_FRAME_DEC) = 1;
+		pRXBD->ctrl_stat = SMAP_BD_RX_EMPTY;
+
+		//Increase the BD-index.
+		SMAP_BD_NEXT(pSMap->u8RXIndex);
+
+		return -2;
+	}
+
+	/* Reset the ring-buffer if needed */
+	if (DATA_BUFFER_FREE() < iPKTLenAligned)
+		DATA_BUFFER_RESET();
+
+	pBuf = pbuf_alloc(iPKTLenAligned, NULL, NULL, _data_buffer_pointer);
+	if(pBuf == NULL) {
+		M_DEBUG("%s: pBuf == NULL\n", __func__);
+
+		//Clear BD.
+		SMAP_REG8(pSMap, SMAP_RXFIFO_FRAME_DEC) = 1;
+		pRXBD->ctrl_stat = SMAP_BD_RX_EMPTY;
+
+		//Increase the BD-index.
+		SMAP_BD_NEXT(pSMap->u8RXIndex);
+
+		return -1;
+	}
+	_data_buffer_pointer += iPKTLenAligned;
+
+	// Command to EE
+	pBuf->cmd_sg[0].addr = (u32)pBuf->payload;
+	pBuf->cmd_sg[0].size = iPKTLen;
+	pBuf->cmd.sg_count = 1;
+
+	// Read from SMAP
+	pBuf->smaptr[0].addr    = pBuf->payload;
+	pBuf->smaptr[0].size    = iPKTLenAligned;
+	pBuf->smaptr[0].dir     = DMAC_TO_MEM;
+	pBuf->smaptr[0].u16PTR  = ((pRXBD->pointer-SMAP_RXBUFBASE) % SMAP_RXBUFSIZE) & ~3;
+	pBuf->smaptr[0].u8Index = pSMap->u8RXIndex;
+	pBuf->smaptr[0].cb_done = _rx_smap_done_callback;
+	pBuf->smaptr[0].cb_arg  = pBuf;
+
+	//Increase the BD-index.
+	SMAP_BD_NEXT(pSMap->u8RXIndex);
+
+	// Transfer the packet
+	rv = smap_dma_transfer(&pBuf->smaptr[0]);
+	if (rv != 0)
+		M_ERROR("%s: smap_dma_transfer returned %d\n", __func__, rv);
+
+	// Disable RX interrupts
+	//SMap_DisableInterrupts(INTR_RXDNV|INTR_RXEND);
+
+	return 1;
 }
 
 
 static int
-HandleRXInt(int iIntFlags)
+HandleRXInt(int iFlags)
 {
+	SMap* pSMap = &SMap0;
 
-	//Iterate through the BDs until we find an empty BD.
+	//M_DEBUG("%s\n", __func__);
 
-	SMap*		pSMap=&SMap0;
-	int		iNoError=1;
+	// Check for more packets
+	while(HandleRX(pSMap) != 0)
+		;
 
-	while	(1)
-	{
-		SMapBD*	pRXBD=&pSMap->pRXBD[pSMap->u8RXIndex];
-		int		iStatus=pRXBD->ctrl_stat;
-		int		iPKTLen;
-
-		//Any data in the BD with index, pSMap->u8RXIndex?
-
-		if	(iStatus&SMAP_BD_RX_EMPTY)
-		{
-
-			//No, then there are no more BDs that have received data, exit!
-
-			return	iNoError;
-		}
-
-		//Yes, retrieve the number of bytes.
-
-		iPKTLen=pRXBD->length;
-
-		//Did any errors occur and is the packet-size in the valid range?
-
-		if	(!(iStatus&SMAP_BD_RX_ERRMASK)&&(iPKTLen>=SMAP_RXMINSIZE&&iPKTLen<=SMAP_RXMAXSIZE))
-		{
-			//No errors and the size is ok. Allocate the pbuf that will hold the received data.
-
-			struct pbuf*	pBuf=(struct pbuf*)pbuf_alloc(PBUF_RAW,iPKTLen,PBUF_POOL);
-
-			if	(pBuf!=NULL)
-			{
-
-				//Determine the address, in the RX-mem, to start reading from.
-
-				pSMap->u16RXPTR=((pRXBD->pointer-SMAP_RXBUFBASE)%SMAP_RXBUFSIZE)&~3;
-
-				//FIFO -> memory
-
-				CopyFromFIFO(pSMap,pBuf);
-
-				//Inform ps2ip that we've received data.
-
-				SMapLowLevelInput(pBuf);
-			}
-			else
-			{
-
-				//Unable to allocate memory for pbuf.
-
-				iNoError=0;
-			}
-		}
-		else
-		{
-
-			//There were errors or size is invalid.
-
-			iNoError=0;
-		}
-
-
-		//Clear BD.
-
-		SMAP_REG8(pSMap,SMAP_RXFIFO_FRAME_DEC)=1;
-		pRXBD->ctrl_stat=SMAP_BD_RX_EMPTY;
-
-		//Increase the BD-index.
-
-		SMAP_BD_NEXT(pSMap->u8RXIndex);
-	}
-	return	iNoError;
+	return 1;
 }
 
 
 static void
+HandleEMAC3IntNr(int nr)
+{
+	switch (nr) {
+	case 0:  /*M_DEBUG("E3_INTR: MMAOP_FAIL\n");*/ break;
+	case 1:  /*M_DEBUG("E3_INTR: MMAOP_SUCCESS\n");*/ break;
+	case 3:  M_DEBUG("E3_INTR: TX_ERR_1\n"); break;
+	case 4:  M_DEBUG("E3_INTR: SQE_ERR_1\n"); break;
+	case 5:  M_DEBUG("E3_INTR: DEAD_1\n"); break;
+	case 6:  M_DEBUG("E3_INTR: TX_ERR_0\n"); break;
+	case 7:  M_DEBUG("E3_INTR: SQE_ERR_0\n"); break;
+	case 8:  M_DEBUG("E3_INTR: DEAD_0\n"); break;
+	case 9:  M_DEBUG("E3_INTR: DEAD_DEPEND\n"); break;
+	case 16: M_DEBUG("E3_INTR: IN_RANGE_ERR\n"); break;
+	case 17: M_DEBUG("E3_INTR: OUT_RANGE_ERR\n"); break;
+	case 18: M_DEBUG("E3_INTR: TOO_LONG\n"); break;
+	case 19: M_DEBUG("E3_INTR: BAD_FCS\n"); break;
+	case 20: M_DEBUG("E3_INTR: ALIGN_ERR\n"); break;
+	case 21: M_DEBUG("E3_INTR: SHORT_EVENT\n"); break;
+	case 22: M_DEBUG("E3_INTR: RUNT_FRAME\n"); break;
+	case 23: M_DEBUG("E3_INTR: BAD_FRAME\n"); break;
+	case 24: M_DEBUG("E3_INTR: PF\n"); break;
+	case 25: M_DEBUG("E3_INTR: OVERRUN\n"); break;
+	default: M_DEBUG("E3_INTR: %d\n", nr); break;
+	}
+}
+
+static void
 HandleEMAC3Int(void)
 {
-	SMap*		pSMap=&SMap0;
-	u32		u32Status=EMAC3REG_READ(pSMap,SMAP_EMAC3_INTR_STAT);
+	SMap* pSMap = &SMap0;
+	u32 u32Status = EMAC3REG_READ(pSMap, SMAP_EMAC3_INTR_STAT);
+	int i;
+
+	for (i = 0; i < 32; i++)
+		if (u32Status & (1<<i))
+			HandleEMAC3IntNr(i);
 
 	//Clear EMAC3 interrupt.
-
-	EMAC3REG_WRITE(pSMap,SMAP_EMAC3_INTR_STAT,u32Status);
+	EMAC3REG_WRITE(pSMap, SMAP_EMAC3_INTR_STAT, u32Status);
 }
 
 
@@ -673,59 +336,53 @@ HandleEMAC3Int(void)
 static void
 ClearAllIRQs(SMap* pSMap)
 {
-	SMap_ClearIRQ(INTR_BITMSK);
+	SMap_ClearIRQ(INTR_ALL);
 }
 
 
 static void
-TXRXEnable(SMap* pSMap,int iEnable)
+TXRXEnable(SMap* pSMap)
 {
-	if	(iEnable)
-	{
+	//Enable tx/rx.
+	EMAC3REG_WRITE(pSMap, SMAP_EMAC3_MODE0, E3_TXMAC_ENABLE|E3_RXMAC_ENABLE);
+}
 
-		//Enable tx/rx.
 
-		EMAC3REG_WRITE(pSMap,SMAP_EMAC3_MODE0,E3_TXMAC_ENABLE|E3_RXMAC_ENABLE);
-	}
-	else
-	{
-		int	iA;
-		u32	u32Val;
+static void
+TXRXDisable(SMap* pSMap)
+{
+	int iA;
+	u32 u32Val;
 
-		//Disable tx/rx.
+	//Disable tx/rx.
+	EMAC3REG_WRITE(pSMap, SMAP_EMAC3_MODE0, EMAC3REG_READ(pSMap, SMAP_EMAC3_MODE0) & (~(E3_TXMAC_ENABLE|E3_RXMAC_ENABLE)));
 
-		EMAC3REG_WRITE(pSMap,SMAP_EMAC3_MODE0,EMAC3REG_READ(pSMap,SMAP_EMAC3_MODE0)&(~(E3_TXMAC_ENABLE|E3_RXMAC_ENABLE)));
-
-		//Check EMAC3 idle status.
-
-		for	(iA=SMAP_LOOP_COUNT;iA!=0;--iA)
-		{
-			u32Val=EMAC3REG_READ(pSMap,SMAP_EMAC3_MODE0);
-			if	((u32Val&E3_RXMAC_IDLE)&&(u32Val&E3_TXMAC_IDLE))
-			{
-				return;
-			}
+	//Check EMAC3 idle status.
+	for(iA=SMAP_LOOP_COUNT; iA!=0; --iA) {
+		u32Val = EMAC3REG_READ(pSMap, SMAP_EMAC3_MODE0);
+		if((u32Val & E3_RXMAC_IDLE) && (u32Val & E3_TXMAC_IDLE)) {
+			return;
 		}
-		dbgprintf("TXRXEnable: EMAC3 is still running(%x).\n",u32Val);
 	}
+	M_DEBUG("%s: EMAC3 is still running(%x).\n", __func__, (unsigned int)u32Val);
 }
 
 
 static void
 TXBDInit(SMap* pSMap)
 {
-	int	iA;
+	int iA;
 
-	pSMap->TX.u16PTRStart=0;
-	pSMap->TX.u16PTREnd=0;
-	pSMap->TX.u8IndexStart=0;
-	pSMap->TX.u8IndexEnd=0;
-	for	(iA=0;iA<SMAP_BD_MAX_ENTRY;++iA)
-	{
-		pSMap->TX.pBD[iA].ctrl_stat=0;	//Clear ready bit
-		pSMap->TX.pBD[iA].reserved=0;		//Must be zero
-		pSMap->TX.pBD[iA].length=0;
-		pSMap->TX.pBD[iA].pointer=0;
+	pSMap->TX.u16PTRStart  = 0;
+	pSMap->TX.u16PTREnd    = 0;
+	pSMap->TX.u8IndexStart = 0;
+	pSMap->TX.u8IndexDMA   = 0;
+	pSMap->TX.u8IndexEnd   = 0;
+	for(iA = 0;iA<SMAP_BD_MAX_ENTRY;++iA) {
+		pSMap->TX.pBD[iA].ctrl_stat = 0;		//Clear ready bit
+		pSMap->TX.pBD[iA].reserved  = 0;		//Must be zero
+		pSMap->TX.pBD[iA].length    = 0;
+		pSMap->TX.pBD[iA].pointer   = 0;
 	}
 }
 
@@ -733,176 +390,68 @@ TXBDInit(SMap* pSMap)
 static void
 RXBDInit(SMap* pSMap)
 {
-	int	iA;
+	int iA;
 
-	pSMap->u16RXPTR=0;
-	pSMap->u8RXIndex=0;
-	for	(iA=0;iA<SMAP_BD_MAX_ENTRY;++iA)
-	{
-		pSMap->pRXBD[iA].ctrl_stat=SMAP_BD_RX_EMPTY;		//Set empty bit
-		pSMap->pRXBD[iA].reserved=0;							//Must be zero
-		pSMap->pRXBD[iA].length=0;
-		pSMap->pRXBD[iA].pointer=0;
+	pSMap->u8RXIndex = 0;
+	for(iA=0; iA<SMAP_BD_MAX_ENTRY; ++iA) {
+		pSMap->pRXBD[iA].ctrl_stat = SMAP_BD_RX_EMPTY;	//Set empty bit
+		pSMap->pRXBD[iA].reserved  = 0;			//Must be zero
+		pSMap->pRXBD[iA].length    = 0;
+		pSMap->pRXBD[iA].pointer   = 0;
 	}
-}
-
-
-static int
-ReadPhy(SMap* pSMap,u32 u32PhyAddr,u32 u32RegAddr)
-{
-	int	iA;
-
-	//Check complete bit
-
-	for	(iA=SMAP_LOOP_COUNT;iA!=0;--iA)
-	{
-		if	(EMAC3REG_READ(pSMap,SMAP_EMAC3_STA_CTRL)&E3_PHY_OP_COMP)
-		{
-			break;
-		}
-	}
-	if	(iA==0)
-	{
-		dbgprintf("ReadPhy: Busy\n");
-		return	-1;
-	}
-
-	//Write phy address and register address
-
-	EMAC3REG_WRITE(pSMap,SMAP_EMAC3_STA_CTRL,E3_PHY_READ|((u32PhyAddr&E3_PHY_ADDR_MSK)<<E3_PHY_ADDR_BITSFT)|
-																			(u32RegAddr&E3_PHY_REG_ADDR_MSK));
-
-	//Check complete bit
-	for	(iA=SMAP_LOOP_COUNT;iA!=0;--iA)
-	{
-		if	(EMAC3REG_READ(pSMap,SMAP_EMAC3_STA_CTRL)&E3_PHY_OP_COMP)
-		{
-
-			//Workaround: it may be needed to re-read to get correct phy data
-
-			return	EMAC3REG_READ(pSMap,SMAP_EMAC3_STA_CTRL)>>E3_PHY_DATA_BITSFT;
-		}
-	}
-	dbgprintf("ReadPhy: Write address busy, val = %x\n",EMAC3REG_READ(pSMap,SMAP_EMAC3_STA_CTRL));
-	return	-1;
-}
-
-
-static int
-WritePhy(SMap* pSMap,u32 u32PhyAddr,u32 u32RegAddr,u16 u16Data)
-{
-	int	iA;
-
-	//Check complete bit.
-
-	for	(iA=SMAP_LOOP_COUNT;iA!=0;--iA)
-	{
-		if	(EMAC3REG_READ(pSMap,SMAP_EMAC3_STA_CTRL)&E3_PHY_OP_COMP)
-		{
-			break;
-		}
-	}
-	if	(iA==0)
-	{
-		dbgprintf("WritePhy: Busy\n");
-		return	-1;
-	}
-
-	//Write data, phy address and register address.
-
-	EMAC3REG_WRITE(pSMap,SMAP_EMAC3_STA_CTRL,((u16Data&E3_PHY_DATA_MSK)<<E3_PHY_DATA_BITSFT)|E3_PHY_WRITE|
-														  ((u32PhyAddr&E3_PHY_ADDR_MSK)<<E3_PHY_ADDR_BITSFT)|(u32RegAddr&E3_PHY_REG_ADDR_MSK));
-
-	//Check complete bit.
-
-	for	(iA=SMAP_LOOP_COUNT;iA!=0;--iA)
-	{
-		if	(EMAC3REG_READ(pSMap,SMAP_EMAC3_STA_CTRL)&E3_PHY_OP_COMP)
-		{
-			return	0;
-		}
-	}
-	dbgprintf("WritePhy: Write data busy, val = %x\n",EMAC3REG_READ(pSMap,SMAP_EMAC3_STA_CTRL));
-	return	-1;
 }
 
 
 static int
 FIFOReset(SMap* pSMap)
 {
-	int	iA;
-	int	iRetVal=0;
+	int iA;
+	int iRetVal = 0;
 
 	//Reset TX FIFO.
-
-	SMAP_REG8(pSMap,SMAP_TXFIFO_CTRL)=TXFIFO_RESET;
+	SMAP_REG8(pSMap, SMAP_TXFIFO_CTRL) = TXFIFO_RESET;
 
 	//Reset RX FIFO.
-
-	SMAP_REG8(pSMap,SMAP_RXFIFO_CTRL)=RXFIFO_RESET;
+	SMAP_REG8(pSMap, SMAP_RXFIFO_CTRL) = RXFIFO_RESET;
 
 	//Confirm reset done.
-
-	for	(iA=SMAP_LOOP_COUNT;iA!=0;--iA)
-	{
-		if	(!(SMAP_REG8(pSMap,SMAP_TXFIFO_CTRL)&TXFIFO_RESET))
-		{
+	for(iA=SMAP_LOOP_COUNT; iA!=0; --iA) {
+		if(!(SMAP_REG8(pSMap, SMAP_TXFIFO_CTRL) & TXFIFO_RESET)) {
 			break;
 		}
 	}
-	if	(iA==0)
-	{
-		dbgprintf("FIFOReset: Txfifo reset is in progress\n");
-		iRetVal|=1;
+	if(iA==0) {
+		M_DEBUG("%s: Txfifo reset is in progress\n", __func__);
+		iRetVal |= 1;
 	}
 
-	for	(iA=SMAP_LOOP_COUNT;iA!=0;--iA)
-	{
-		if	(!(SMAP_REG8(pSMap,SMAP_RXFIFO_CTRL)&RXFIFO_RESET))
-		{
+	for(iA=SMAP_LOOP_COUNT; iA!=0; --iA) {
+		if(!(SMAP_REG8(pSMap, SMAP_RXFIFO_CTRL) & RXFIFO_RESET)) {
 			break;
 		}
 	}
-	if	(iA==0)
-	{
-		dbgprintf("FIFOReset: Rxfifo reset is in progress\n");
-		iRetVal|=2;
+	if(iA==0) {
+		M_DEBUG("%s: Rxfifo reset is in progress\n", __func__);
+		iRetVal |= 2;
 	}
-	return	iRetVal;
-}
 
-
-static void
-RegInit(SMap* pSMap)
-{
-	SMap_DisableInterrupts(INTR_BITMSK);
-	ClearAllIRQs(pSMap);
-
-	//BD mode.
-
-	SMAP_REG8(pSMap,SMAP_BD_MODE)=0;	//Swap
-
-	//Reset TX/RX FIFO.
-
-	FIFOReset(pSMap);
+	return iRetVal;
 }
 
 
 static int
 EMAC3SoftReset(SMap* pSMap)
 {
-	int	iA;
+	int iA;
 
-	EMAC3REG_WRITE(pSMap,SMAP_EMAC3_MODE0,E3_SOFT_RESET);
-	for	(iA=SMAP_LOOP_COUNT;iA!=0;--iA)
-	{
-		if	(!(EMAC3REG_READ(pSMap,SMAP_EMAC3_MODE0)&E3_SOFT_RESET))
-		{
-			return	0;
+	EMAC3REG_WRITE(pSMap, SMAP_EMAC3_MODE0, E3_SOFT_RESET);
+	for(iA=SMAP_LOOP_COUNT; iA!=0; --iA) {
+		if(!(EMAC3REG_READ(pSMap, SMAP_EMAC3_MODE0) & E3_SOFT_RESET)) {
+			return 0;
 		}
 	}
-	dbgprintf("EMAC3SoftReset: EMAC3 reset is in progress\n");
-	return	-1;
+	M_DEBUG("%s: EMAC3 reset is in progress\n", __func__);
+	return -1;
 }
 
 
@@ -910,609 +459,80 @@ static void
 EMAC3SetDefValue(SMap* pSMap)
 {
 	//Set HW address.
-
-	EMAC3REG_WRITE(pSMap,SMAP_EMAC3_ADDR_HI,((pSMap->au8HWAddr[0]<<8)|pSMap->au8HWAddr[1]));
-	EMAC3REG_WRITE(pSMap,SMAP_EMAC3_ADDR_LO,((pSMap->au8HWAddr[2]<<24)|(pSMap->au8HWAddr[3]<<16)|(pSMap->au8HWAddr[4]<<8)|
-															pSMap->au8HWAddr[5]));
+	EMAC3REG_WRITE(pSMap, SMAP_EMAC3_ADDR_HI, ((pSMap->au8HWAddr[0]<<8)|pSMap->au8HWAddr[1]));
+	EMAC3REG_WRITE(pSMap, SMAP_EMAC3_ADDR_LO, ((pSMap->au8HWAddr[2]<<24)|(pSMap->au8HWAddr[3]<<16)|(pSMap->au8HWAddr[4]<<8)|pSMap->au8HWAddr[5]));
 
 	//Inter-frame GAP.
-
-	EMAC3REG_WRITE(pSMap,SMAP_EMAC3_INTER_FRAME_GAP,4);
+	EMAC3REG_WRITE(pSMap, SMAP_EMAC3_INTER_FRAME_GAP, 4);
 
 	//Rx mode.
-
-	EMAC3REG_WRITE(pSMap,SMAP_EMAC3_RxMODE,(E3_RX_STRIP_PAD|E3_RX_STRIP_FCS|E3_RX_INDIVID_ADDR|E3_RX_BCAST));
+	EMAC3REG_WRITE(pSMap, SMAP_EMAC3_RxMODE, (E3_RX_STRIP_PAD|E3_RX_STRIP_FCS|E3_RX_INDIVID_ADDR|E3_RX_BCAST));
 
 	//Tx fifo value for request priority. low = 7*8=56, urgent = 15*8=120.
-
-	EMAC3REG_WRITE(pSMap,SMAP_EMAC3_TxMODE1,((7<<E3_TX_LOW_REQ_BITSFT)|(15<<E3_TX_URG_REQ_BITSFT)));
+	EMAC3REG_WRITE(pSMap, SMAP_EMAC3_TxMODE1, ((7<<E3_TX_LOW_REQ_BITSFT)|(15<<E3_TX_URG_REQ_BITSFT)));
 
 	//TX threshold, (12+1)*64=832.
+	EMAC3REG_WRITE(pSMap, SMAP_EMAC3_TX_THRESHOLD, ((12&E3_TX_THRESHLD_MSK)<<E3_TX_THRESHLD_BITSFT));
 
-	EMAC3REG_WRITE(pSMap,SMAP_EMAC3_TX_THRESHOLD,((12&E3_TX_THRESHLD_MSK)<<E3_TX_THRESHLD_BITSFT));
+	//Rx watermark, low =  16*8= 128, hi = 128*8=1024.
+	EMAC3REG_WRITE(pSMap, SMAP_EMAC3_RX_WATERMARK, ((16&E3_RX_LO_WATER_MSK)<<E3_RX_LO_WATER_BITSFT)|((128&E3_RX_HI_WATER_MSK)<<E3_RX_HI_WATER_BITSFT));
 
-	//Rx watermark, low = 16*8=128, hi = 128*8=1024.
-
-	EMAC3REG_WRITE(pSMap,SMAP_EMAC3_RX_WATERMARK,((16&E3_RX_LO_WATER_MSK)<<E3_RX_LO_WATER_BITSFT)|
-																 ((128&E3_RX_HI_WATER_MSK)<<E3_RX_HI_WATER_BITSFT));
+	// Pause timer
+	EMAC3REG_WRITE(pSMap, SMAP_EMAC3_PAUSE_TIMER, 0xffff);
 
 	//Enable all EMAC3 interrupts.
-
-	EMAC3REG_WRITE(pSMap,SMAP_EMAC3_INTR_ENABLE,E3_INTR_ALL);
+	EMAC3REG_WRITE(pSMap, SMAP_EMAC3_INTR_ENABLE, E3_INTR_ALL);
 }
 
 
 static void
-EMAC3Init(SMap* pSMap,int iReset)
+EMAC3Init(SMap* pSMap)
 {
 
 	//Reset EMAC3.
-
 	EMAC3SoftReset(pSMap);
 
 	//EMAC3 operating MODE.
-
-	EMAC3REG_WRITE(pSMap,SMAP_EMAC3_MODE1,(E3_FDX_ENABLE|E3_IGNORE_SQE|E3_MEDIA_100M|E3_RXFIFO_2K|E3_TXFIFO_1K|E3_TXREQ0_SINGLE|
-														E3_TXREQ1_SINGLE));
-
-	//phy init.
-
-	if	(PhyInit(pSMap,iReset)<0)
-	{
-		dbgprintf("EMAC3Init: Phy init error\n");
-		return;
-	}
-
-	//This flag may be set when unloading
-
-	if (iReset)
-	{
-		return;
-	}
+	EMAC3REG_WRITE(pSMap, SMAP_EMAC3_MODE1, (E3_FDX_ENABLE|E3_IGNORE_SQE|E3_MEDIA_100M|E3_RXFIFO_2K|E3_TXFIFO_1K|E3_TXREQ0_MULTI|E3_TXREQ1_SINGLE));
 
 	//Disable interrupts.
-
-	SMap_DisableInterrupts(INTR_BITMSK);
+	SMap_DisableInterrupts(INTR_ALL);
 
 	//Clear interruptreq. flags.
-
 	ClearAllIRQs(pSMap);
 
 	//Permanently set to default value.
-
 	EMAC3SetDefValue(pSMap);
 }
 
 
 static void
-EMAC3ReInit(SMap* pSMap)
+Reset(SMap* pSMap)
 {
-	EMAC3SoftReset(pSMap);
-	EMAC3REG_WRITE(pSMap,SMAP_EMAC3_MODE1,pSMap->u32TXMode);
-	EMAC3SetDefValue(pSMap);
-}
+	SMap_DisableInterrupts(INTR_ALL);
+	ClearAllIRQs(pSMap);
 
+	//BD mode.
+	SMAP_REG8(pSMap, SMAP_BD_MODE) = 0;	//Swap
 
-//return value 0: success, <0: error
+	//Reset TX/RX FIFO.
+	FIFOReset(pSMap);
 
-static int
-PhyInit(SMap* pSMap,int iReset)
-{
-	int	iVal=PhyReset(pSMap);
-
-	if (iVal<0)
-	{
-		return	iVal;
-	}
-
-	//This flag may be set when unloading
-
-	if	(iReset)
-	{
-		return	0;
-	}
-
-	//After phy reset, auto-nego is performed automatically
-
-	iVal=AutoNegotiation(pSMap,DISABLE);
-	if (iVal==0)
-	{
-
-		//Wait 1 second ?? probably need not.
-
-		pSMap->u32Flags|=SMAP_F_LINKESTABLISH;
-		PhySetDSP(pSMap);
-
-		//Auto-negotiation is succeeded
-
-		return	0;
-	}
-
-	//Force 100Mbps(HDX) or 10Mbps(HDX).
-
-	ForceSPD100M(pSMap);
-	return	0;
-}
-
-
-static int
-PhyReset(SMap* pSMap)
-{
-	int	iA;
-
-	//Set reset bit.
-
-	WritePhy(pSMap,DsPHYTER_ADDRESS,DsPHYTER_BMCR,PHY_BMCR_RST|PHY_BMCR_100M|PHY_BMCR_ANEN|PHY_BMCR_DUPM);
-
-	//Wait 300us.
-
-	DelayThread(300);
-
-	//Confirm reset done.
-
-	for	(iA=SMAP_LOOP_COUNT;iA!=0;--iA)
-	{
-		if	(!(ReadPhy(pSMap,DsPHYTER_ADDRESS,DsPHYTER_BMCR)&PHY_BMCR_RST))
-		{
-			return	0;
-		}
-		DelayThread(300);
-	}
-	dbgprintf("PhyReset: PHY reset not complete(BMCR=0x%x)\n",ReadPhy(pSMap,DsPHYTER_ADDRESS,DsPHYTER_BMCR));
-	return	-1;
-}
-
-
-static int
-AutoNegotiation(SMap* pSMap,int iEnableAutoNego)
-{
-	int	iA;
-
-	if	(iEnableAutoNego)
-	{
-
-		//Set auto-negotiation.
-
-		WritePhy(pSMap,DsPHYTER_ADDRESS,DsPHYTER_BMCR,PHY_BMCR_100M|PHY_BMCR_ANEN|PHY_BMCR_DUPM);
-	}
-
-	if	(ConfirmAutoNegotiation(pSMap)>=0)
-	{
-		return	0;
-	}
-	for	(iA=SMAP_AUTONEGO_RETRY;iA!=0;--iA)
-	{
-
-		//Timeout restart auto-negotiation.
-
-		WritePhy(pSMap,DsPHYTER_ADDRESS,DsPHYTER_BMCR,PHY_BMCR_100M|PHY_BMCR_ANEN|PHY_BMCR_DUPM|PHY_BMCR_RSAN);
-		if	(ConfirmAutoNegotiation(pSMap)>=0)
-		{
-			return	0;
-		}
-	}
-
-	//Error.
-
-	return	-1;
-}
-
-
-static int
-ConfirmAutoNegotiation(SMap* pSMap)
-{
-	int	iA;
-	int	iPhyVal;
-	int     spdrev;
-
-	for	(iA=SMAP_AUTONEGO_TIMEOUT;iA!=0;--iA)
-	{
-
-		//Auto nego timeout is 3s.
-
-		if	(ReadPhy(pSMap,DsPHYTER_ADDRESS,DsPHYTER_BMSR)&PHY_BMSR_ANCP)
-		{
-			break;
-		}
-		DelayThread(1000);	//wait 1ms
-	}
-	if	(iA==0)
-	{
-		dbgprintf("ConfirmAutoNegotiation: Auto-negotiation timeout, not complete(BMSR=%x)\n",ReadPhy(pSMap,DsPHYTER_ADDRESS,
-																																	 DsPHYTER_BMSR));
-		return	-1;
-	}
-
-	// **ARGH: UGLY HACK! FIXME! **
-	spdrev = SMAP_REG16(pSMap, SPD_R_REV_1);
-
-	if (spdrev >= 0x13)
-	{
-		dbgprintf("Disabling autonegotiation sync on v12 - seems to work anyway - beware, hack inside.\n");
-		return  0;
-	}
-
-	//Confirm speed & duplex mode.
-
-	for	(iA=SMAP_LOOP_COUNT;iA!=0;--iA)
-	{
-		iPhyVal=ReadPhy(pSMap,DsPHYTER_ADDRESS,DsPHYTER_PHYSTS);
-		if	((iPhyVal&PHY_STS_ANCP)&&(iPhyVal&PHY_STS_LINK))
-		{
-			break;
-		}
-		DelayThread(1000);
-	}
-	if	(iA==0)
-	{
-
-		//Error.
-
-		dbgprintf("ConfirmAutoNegotiation: Auto-negotiation error?? (PHYSTS=%x)\n",iPhyVal);
-	}
-	else
-	{
-		u32	u32E3Val=EMAC3REG_READ(pSMap,SMAP_EMAC3_MODE1);
-
-		dbgprintf("ConfirmAutoNegotiation: Auto-negotiation complete. %s %s duplex mode.\n",
-					 (iPhyVal&PHY_STS_10M) ? "10Mbps":"100Mbps",(iPhyVal&PHY_STS_FDX) ? "Full":"Half");
-
-		if	(iPhyVal&PHY_STS_FDX)
-		{
-
-			//Full duplex mode.
-
-			u32E3Val|=(E3_FDX_ENABLE|E3_FLOWCTRL_ENABLE|E3_ALLOW_PF);
-		}
-		else
-		{
-
-			//Half duplex mode.
-
-			u32E3Val&=~(E3_FDX_ENABLE|E3_FLOWCTRL_ENABLE|E3_ALLOW_PF);
-			if	(iPhyVal&PHY_STS_10M)
-			{
-				u32E3Val&=~E3_IGNORE_SQE;
-			}
-		}
-		u32E3Val&=~E3_MEDIA_MSK;
-		u32E3Val|=iPhyVal&PHY_STS_10M ? E3_MEDIA_10M:E3_MEDIA_100M;
-
-		EMAC3REG_WRITE(pSMap,SMAP_EMAC3_MODE1,u32E3Val);
-	}
-	return	0;
-}
-
-
-static void
-ForceSPD100M(SMap* pSMap)
-{
-	int	iA;
-
-	dbgprintf("ForceSPD100M: try 100Mbps Half duplex mode...\n");
-
-	//Set 100Mbps, half duplex.
-
-	WritePhy(pSMap,DsPHYTER_ADDRESS,DsPHYTER_BMCR,PHY_BMCR_100M);
-
-	//Delay 2s.
-
-	pSMap->u32Flags|=SMAP_F_CHECK_FORCE100M;
-	for	(iA=SMAP_FORCEMODE_WAIT;iA!=0;--iA)
-	{
-		DelayThread(1000);
-	}
-	ConfirmForceSPD(pSMap);
-}
-
-
-static void
-ForceSPD10M(SMap* pSMap)
-{
-	int	iA;
-
-	dbgprintf("ForceSPD10M: try 10Mbps Half duplex mode...\n");
-
-	//Set 10Mbps, half duplex.
-
-	WritePhy(pSMap,DsPHYTER_ADDRESS,DsPHYTER_BMCR,PHY_BMCR_10M);
-
-	//Delay 2s.
-
-	pSMap->u32Flags|=SMAP_F_CHECK_FORCE10M;
-	for	(iA=SMAP_FORCEMODE_WAIT;iA!=0;--iA)
-	{
-		DelayThread(1000);
-	}
-	ConfirmForceSPD(pSMap);
-}
-
-
-static void
-ConfirmForceSPD(SMap* pSMap)
-{
-	int	iA;
-	int	iPhyVal;
-
-	//Confirm link status, wait 1s is needed.
-
-	for	(iA=SMAP_FORCEMODE_TIMEOUT;iA!=0;--iA)
-	{
-		iPhyVal=ReadPhy(pSMap,DsPHYTER_ADDRESS,DsPHYTER_BMSR);
-		if	(iPhyVal&PHY_BMSR_LINK)
-		{
-			break;
-		}
-		DelayThread(1000);
-	}
-	if	(iA!=0)
-	{
-		u32	u32E3Val;
-
-validlink:
-		u32E3Val=EMAC3REG_READ(pSMap,SMAP_EMAC3_MODE1);
-		u32E3Val&=~(E3_FDX_ENABLE|E3_FLOWCTRL_ENABLE|E3_ALLOW_PF|E3_MEDIA_MSK);
-		if (pSMap->u32Flags&SMAP_F_CHECK_FORCE100M)
-		{
-			dbgprintf("ConfirmForceSPD: 100Mbps Half duplex mode\n");
-			u32E3Val|=E3_MEDIA_100M;
-		}
-		else if (pSMap->u32Flags&SMAP_F_CHECK_FORCE10M)
-		{
-			dbgprintf("ConfirmForceSPD: 10Mbps Half duplex mode\n");
-			u32E3Val&=~E3_IGNORE_SQE;
-			u32E3Val|=E3_MEDIA_10M;
-		}
-		EMAC3REG_WRITE(pSMap,SMAP_EMAC3_MODE1,u32E3Val);
-		pSMap->u32Flags&=~(SMAP_F_CHECK_FORCE100M|SMAP_F_CHECK_FORCE10M);
-		pSMap->u32Flags|=SMAP_F_LINKESTABLISH;
-		PhySetDSP(pSMap);
-		return;	//success
-	}
-
-	if	(pSMap->u32Flags&SMAP_F_CHECK_FORCE100M)
-	{
-		pSMap->u32Flags&=~SMAP_F_CHECK_FORCE100M;
-		ForceSPD10M(pSMap);
-	}
-	else if	(pSMap->u32Flags&SMAP_F_CHECK_FORCE10M)
-	{
-		pSMap->u32Flags&=~SMAP_F_CHECK_FORCE10M;
-		iPhyVal=ReadPhy(pSMap,DsPHYTER_ADDRESS,DsPHYTER_PHYSTS);
-		if	(iPhyVal&PHY_STS_LINK)
-		{
-
-			//Valid link.
-
-			pSMap->u32Flags|=SMAP_F_CHECK_FORCE10M;
-			goto	validlink;
-		}
-		else
-		{
-			dbgprintf("ConfirmForceSPD: fail force speed mode. link not valid.  phystat=0x%04x\n",iPhyVal);
-		}
-	}
-}
-
-
-static void
-PhySetDSP(SMap* pSMap)
-{
-	int	iID1;
-	int	iID2;
-	int	iPhyVal;
-
-	if (!(pSMap->u32Flags&SMAP_F_LINKESTABLISH))
-	{
-
-		//Link not established.
-
-		return;
-	}
-
-	//Tvalue is used in emac3 re-init without phy init.
-
-	pSMap->u32TXMode=EMAC3REG_READ(pSMap,SMAP_EMAC3_MODE1);
-
-	iID1=ReadPhy(pSMap,DsPHYTER_ADDRESS,DsPHYTER_PHYIDR1);
-	iID2=ReadPhy(pSMap,DsPHYTER_ADDRESS,DsPHYTER_PHYIDR2);
-
-	if	(!((iID1==PHY_IDR1_VAL)&&((iID2&PHY_IDR2_MSK)==PHY_IDR2_VAL)))
-	{
-		pSMap->u32Flags|=SMAP_F_LINKVALID;
-		return;
-	}
-
-	if	(pSMap->u32Flags&SMAP_F_LINKVALID)
-	{
-		return;
-	}
-
-	WritePhy(pSMap,DsPHYTER_ADDRESS,0x13,0x0001);
-	WritePhy(pSMap,DsPHYTER_ADDRESS,0x19,0x1898);
-	WritePhy(pSMap,DsPHYTER_ADDRESS,0x1f,0x0000);
-	WritePhy(pSMap,DsPHYTER_ADDRESS,0x1d,0x5040);
-	WritePhy(pSMap,DsPHYTER_ADDRESS,0x1e,0x008c);
-	WritePhy(pSMap,DsPHYTER_ADDRESS,0x13,0x0000);
-	iPhyVal=ReadPhy(pSMap,DsPHYTER_ADDRESS,DsPHYTER_PHYSTS);
-	if	((iPhyVal&(PHY_STS_DUPS|PHY_STS_SPDS|PHY_STS_LINK))==(PHY_STS_HDX|PHY_STS_10M|PHY_STS_LINK))
-	{
-		WritePhy(pSMap,DsPHYTER_ADDRESS,0x1a,0x0104);
-	}
-
-	pSMap->u32Flags|=SMAP_F_LINKVALID;
-}
-
-
-static void
-Reset(SMap* pSMap,int iReset)
-{
-	RegInit(pSMap);
-	EMAC3Init(pSMap,iReset);
-}
-
-
-//1 clock with putting data
-
-static inline void
-EEPROMClockDataOut(SMap* pSMap,int val)
-{
-	SMAP_PP_SET_D(pSMap,val);
-
-	SMAP_PP_CLK_OUT(pSMap,0);
-	DelayThread(1);	//tDIS
-
-	SMAP_PP_CLK_OUT(pSMap,1);
-	DelayThread(1);	//tSKH, tDIH
-
-	SMAP_PP_CLK_OUT(pSMap,0);
-	DelayThread(1);	//tSKL
-}
-
-
-//1 clock with getting data
-
-static inline int
-EEPROMClockDataIn(SMap* pSMap)
-{
-	int	iRet;
-
-	SMAP_PP_SET_D(pSMap,0);
-	SMAP_PP_CLK_OUT(pSMap,0);
-	DelayThread(1);	//tSKL
-
-	SMAP_PP_CLK_OUT(pSMap,1);
-	DelayThread(1);	//tSKH, tPD0,1
-	iRet=SMAP_PP_GET_Q(pSMap);
-
-	SMAP_PP_CLK_OUT(pSMap,0);
-	DelayThread(1);	//tSKL
-
-	return	iRet;
-}
-
-
-//Put address(6bit)
-
-static void
-EEPROMPutAddr(SMap* pSMap,u8 u8Addr)
-{
-	int	iA;
-
-	u8Addr&=0x3f;
-	for	(iA=0;iA<6;++iA)
-	{
-		EEPROMClockDataOut(pSMap,(u8Addr&0x20) ? 1:0);
-		u8Addr<<=1;
-	}
-}
-
-
-//Get data(16bit)
-
-static u16
-GetDataFromEEPROM(SMap* pSMap)
-{
-	int	iA;
-	u16	u16Data=0;
-
-	for	(iA=0;iA<16;++iA)
-	{
-		u16Data<<=1;
-		u16Data|=EEPROMClockDataIn(pSMap);
-	}
-	return	u16Data;
-}
-
-
-//Instruction start(rise S, put start bit, op code)
-
-static void
-EEPROMStartOp(SMap* pSMap,int iOp)
-{
-
-	//Set port direction.
-
-	SMAP_REG8(pSMap,SMAP_PIOPORT_DIR)=(PP_SCLK|PP_CSEL|PP_DIN);
-
-	//Rise chip select.
-
-	SMAP_PP_SET_S(pSMap,0);
-	SMAP_PP_SET_D(pSMap,0);
-	SMAP_PP_CLK_OUT(pSMap,0);
-	DelayThread(1);	//tSKS
-
-	SMAP_PP_SET_S(pSMap,1);
-	SMAP_PP_SET_D(pSMap,0);
-	SMAP_PP_CLK_OUT(pSMap,0);
-	DelayThread(1);	//tCSS
-
-	//Put start bit.
-
-	EEPROMClockDataOut(pSMap,1);
-
-	//Put op code.
-
-	EEPROMClockDataOut(pSMap,(iOp>>1)&1);
-	EEPROMClockDataOut(pSMap,iOp&1);
-}
-
-
-//Chip select low
-
-static void
-EEPROMCSLow(SMap* pSMap)
-{
-	SMAP_PP_SET_S(pSMap,0);
-	SMAP_PP_SET_D(pSMap,0);
-	SMAP_PP_CLK_OUT(pSMap,0);
-	DelayThread(2);	//tSLSH
-}
-
-
-//EEPROM instruction
-
-static void
-ReadEEPROMExec(SMap* pSMap,u8 u8Addr,u16* pu16Data,int iN)
-{
-	int	iA;
-
-	EEPROMStartOp(pSMap,PP_OP_READ);
-	EEPROMPutAddr(pSMap,u8Addr);
-	for	(iA=0;iA<iN;++iA)
-	{
-		*pu16Data++=GetDataFromEEPROM(pSMap);
-	}
-	EEPROMCSLow(pSMap);
-}
-
-
-//Read EEPROM
-
-static void
-ReadFromEEPROM(SMap* pSMap,u8 u8Addr,u16* pu16Data,int iN)
-{
-	int	flags;
-
-	CpuSuspendIntr(&flags);
-	ReadEEPROMExec(pSMap,u8Addr,pu16Data,iN);
-	CpuResumeIntr(flags);
+	EMAC3Init(pSMap);
 }
 
 
 static void
 PrintMACAddress(SMap const* pSMap)
 {
-	int	iA;
+	int iA;
 
 	printf("SMap: Ethernet detected, MAC ");
-	for	(iA=0;iA<6;++iA)
-	{
-		int	iB=pSMap->au8HWAddr[iA];
+	for(iA=0; iA<6; ++iA) {
+		int iB = pSMap->au8HWAddr[iA];
 
 		printf("%02x",iB);
-		if	(iA!=5)
-		{
+		if(iA != 5) {
 			printf(":");
 		}
 	}
@@ -1524,27 +544,25 @@ static int
 GetNodeAddr(SMap* pSMap)
 {
 	int	iA;
-	u16*	pu16MAC=(u16*)pSMap->au8HWAddr;
+	u16*	pu16MAC = (u16*)pSMap->au8HWAddr;
 	u16	u16CHKSum;
-	u16	u16Sum=0;
+	u16	u16Sum = 0;
 
-	ReadFromEEPROM(pSMap,0x0,pu16MAC,3);
-	ReadFromEEPROM(pSMap,0x3,&u16CHKSum,1);
+	ReadFromEEPROM(pSMap, 0x0, pu16MAC, 3);
+	ReadFromEEPROM(pSMap, 0x3, &u16CHKSum, 1);
 
-	for	(iA=0;iA<3;++iA)
-	{
+	for(iA=0; iA<3; ++iA) {
 		u16Sum+=*pu16MAC++;
 	}
-	if	(u16Sum!=u16CHKSum)
-	{
-		dbgprintf("GetNodeAddr: MAC address read error\n");
-		dbgprintf("checksum %04x is read from EEPROM, and %04x is calculated by mac address read now.\n",u16CHKSum,u16Sum);
+	if(u16Sum != u16CHKSum) {
+		M_DEBUG("%s: MAC address read error\n", __func__);
+		M_DEBUG("checksum %04x is read from EEPROM, and %04x is calculated by mac address read now.\n", u16CHKSum, u16Sum);
 		PrintMACAddress(pSMap);
-		memset(pSMap->au8HWAddr,0,6);
-		return	-1;
+		memset(pSMap->au8HWAddr, 0, 6);
+		return -1;
 	}
 	PrintMACAddress(pSMap);
-	return	0;
+	return 0;
 }
 
 
@@ -1554,55 +572,88 @@ BaseInit(SMap* pSMap)
 
 	//We can access register&BD after this routine returned.
 
-	pSMap->pu8Base=(u8 volatile*)SMAP_BASE;
-	pSMap->TX.pBD=(SMapBD*)(pSMap->pu8Base+SMAP_BD_BASE_TX);
-	pSMap->pRXBD=(SMapBD*)(pSMap->pu8Base+SMAP_BD_BASE_RX);
+	pSMap->pu8Base = (u8 volatile*)SMAP_BASE;
+	pSMap->TX.pBD  = (SMapBD*)(pSMap->pu8Base + SMAP_BD_BASE_TX);
+	pSMap->pRXBD   = (SMapBD*)(pSMap->pu8Base + SMAP_BD_BASE_RX);
 
-	pSMap->TX.u16Size=SMAP_TXBUFSIZE;
+	pSMap->TX.u16Size = SMAP_TXBUFSIZE;
 }
 
 
 u8 const*
 SMap_GetMACAddress(void)
 {
-	SMap*		pSMap=&SMap0;
+	SMap* pSMap = &SMap0;
 
-	return	pSMap->au8HWAddr;
+	return pSMap->au8HWAddr;
 }
 
 
 void
 SMap_EnableInterrupts(int iFlags)
 {
-	dev9IntrEnable(iFlags&INTR_BITMSK);
+	dev9IntrEnable(iFlags & INTR_ALL);
 }
 
 
 void
 SMap_DisableInterrupts(int iFlags)
 {
-	dev9IntrDisable(iFlags&INTR_BITMSK);
+	dev9IntrDisable(iFlags & INTR_ALL);
 }
 
 
 int
 SMap_GetIRQ(void)
 {
-	SMap*		pSMap=&SMap0;
+	SMap* pSMap = &SMap0;
 
-	return	SMAP_REG16(pSMap,SMAP_INTR_STAT)&INTR_BITMSK;
+	return SMAP_REG16(pSMap, SMAP_INTR_STAT) & INTR_ALL;
 }
 
 
 void
 SMap_ClearIRQ(int iFlags)
 {
-	SMap*		pSMap=&SMap0;
+	SMap* pSMap = &SMap0;
 
-	SMAP_REG16(pSMap,SMAP_INTR_CLR)=iFlags&INTR_BITMSK;
-	if	(iFlags&INTR_EMAC3)
-	{
-		EMAC3REG_WRITE(pSMap,SMAP_EMAC3_INTR_STAT,E3_INTR_ALL);
+	SMAP_REG16(pSMap,SMAP_INTR_CLR) = iFlags & INTR_ALL;
+	if(iFlags & INTR_EMAC3) {
+		EMAC3REG_WRITE(pSMap, SMAP_EMAC3_INTR_STAT, E3_INTR_ALL);
+	}
+}
+
+
+void
+SMap_SetLink(SMap* pSMap, u32 iLNK, u32 iFD, u32 i10M)
+{
+	u32 u32E3Val;
+
+	if (iLNK) {
+		M_DEBUG("%s: %s %s duplex mode.\n", __func__, (i10M) ? "10Mbps" : "100Mbps", (iFD) ? "Full" : "Half");
+
+		u32E3Val = EMAC3REG_READ(pSMap, SMAP_EMAC3_MODE1);
+
+		if (iFD) {
+			u32E3Val |= (E3_FDX_ENABLE|E3_FLOWCTRL_ENABLE|E3_ALLOW_PF);
+		}
+		else {
+			u32E3Val &= ~(E3_FDX_ENABLE|E3_FLOWCTRL_ENABLE|E3_ALLOW_PF);
+			if (i10M)
+				u32E3Val &= ~E3_IGNORE_SQE;
+		}
+
+		// FIXME: Linux driver does not support pause frames
+		u32E3Val &= ~(E3_FLOWCTRL_ENABLE|E3_ALLOW_PF);
+
+		u32E3Val &= ~E3_MEDIA_MSK;
+		u32E3Val |= i10M ? E3_MEDIA_10M : E3_MEDIA_100M;
+
+		EMAC3REG_WRITE(pSMap, SMAP_EMAC3_MODE1, u32E3Val);
+		pSMap->u32Flags |=  SMAP_F_LINKVALID;
+	}
+	else {
+		pSMap->u32Flags &= ~SMAP_F_LINKVALID;
 	}
 }
 
@@ -1610,46 +661,32 @@ SMap_ClearIRQ(int iFlags)
 int
 SMap_Init(void)
 {
-	SMap*		pSMap=&SMap0;
+	SMap* pSMap = &SMap0;
 
-	memset(pSMap,0,sizeof(*pSMap));
+	memset(pSMap, 0, sizeof(*pSMap));
+
+	if (smap_dma_init(pSMap) != 0) {
+		return 0;
+	}
 
 	BaseInit(pSMap);
-	if	(GetNodeAddr(pSMap)<0)
-	{
-		return	FALSE;
+	if(GetNodeAddr(pSMap) < 0) {
+		return 0;
 	}
 
-	Reset(pSMap,RESET_INIT);
-	TXRXEnable(pSMap,DISABLE);
+	Reset(pSMap);
+	TXRXDisable(pSMap);
 	TXBDInit(pSMap);
 	RXBDInit(pSMap);
 
-	if	(pSMap->u32Flags&SMAP_F_PRINT_MSG)
-	{
-		dbgprintf("SMap_Init: PlayStation 2 SMAP open\n");
-	}
-
-	if	(!(pSMap->u32Flags&SMAP_F_LINKVALID))
-	{
-		dbgprintf("SMap_Init: Waiting for link to stabilize...\n");
-//		XXX: we have to add a linkvalid thread (chk linux smap.c)!!!!
-//		while (!(smap->u32Flags & SMAP_F_LINKVALID)) {
-//		delay();
-	}
-	FIFOReset(pSMap);
-	EMAC3ReInit(pSMap);
-	TXBDInit(pSMap);
-	RXBDInit(pSMap);
-
-	return	TRUE;
+	return 1;
 }
 
 
 void
 SMap_SetMacAddress(const char *addr)
 {
-	SMap*		pSMap=&SMap0;
+	SMap* pSMap = &SMap0;
 
 	EMAC3REG_WRITE(pSMap, SMAP_EMAC3_ADDR_HI,
 			addr[0] <<  8 | addr[1]);
@@ -1658,273 +695,139 @@ SMap_SetMacAddress(const char *addr)
 			addr[4] <<  8 | addr[5]);
 }
 
+
 void
 SMap_Start(void)
 {
-	SMap*		pSMap=&SMap0;
+	SMap* pSMap = &SMap0;
 
-	if (pSMap->u32Flags&SMAP_F_OPENED)
-	{
+	if (pSMap->u32Flags & SMAP_F_OPENED) {
 		return;
 	}
 
 	ClearAllIRQs(pSMap);
-	TXRXEnable(pSMap,ENABLE);
-	SMap_EnableInterrupts(INTR_BITMSK);
+	TXRXEnable(pSMap);
+	SMap_EnableInterrupts(INTR_ALL & ~INTR_TXDNV);
 
-	pSMap->u32Flags|=SMAP_F_OPENED;
+	pSMap->u32Flags |= SMAP_F_OPENED;
 }
 
 
 void
 SMap_Stop(void)
 {
-	SMap*		pSMap=&SMap0;
+	SMap* pSMap = &SMap0;
 
-	TXRXEnable(pSMap,DISABLE);
-	SMap_DisableInterrupts(INTR_BITMSK);
+	TXRXDisable(pSMap);
+	SMap_DisableInterrupts(INTR_ALL);
 	ClearAllIRQs(pSMap);
 
-	pSMap->u32Flags&=~SMAP_F_OPENED;
-}
-
-
-int
-SMap_CanSend(void)
-{
-	SMap*		pSMap=&SMap0;
-
-	return	ComputeFreeSize(&pSMap->TX);
+	pSMap->u32Flags &= ~SMAP_F_OPENED;
 }
 
 
 static void
-CopyToTXBuffer(SMap* pSMap,struct pbuf* pSrc)
+_tx_smap_done_callback(struct smap_dma_transfer *smaptr, void *arg)
 {
-	u8*	pu8Dest=(u8*)au32TXBuf;
+	struct pbuf *pBuf = (struct pbuf *)arg;
+	SMap* pSMap = &SMap0;
+	SMapBD* pTXBD = &pSMap->TX.pBD[smaptr->u8Index];
+	SMAP_BD_NEXT(pSMap->TX.u8IndexEnd);
 
-	while	(pSrc!=NULL)
-	{
-		memcpy(pu8Dest,pSrc->payload,pSrc->len);
-		pu8Dest+=pSrc->len;
-		pSrc=pSrc->next;
-	}
-}
+	//M_DEBUG("%s\n", __func__);
 
+	//Send from FIFO to ethernet.
+	pTXBD->length = pBuf->len;
+	pTXBD->pointer = smaptr->u16PTR + SMAP_TXBUFBASE;
+	SMAP_REG8(pSMap, SMAP_TXFIFO_FRAME_INC) = 1;
+	pTXBD->ctrl_stat = SMAP_BD_TX_READY|SMAP_BD_TX_GENFCS|SMAP_BD_TX_GENPAD;
+	EMAC3REG_WRITE(pSMap, SMAP_EMAC3_TxMODE0, E3_TX_GNP_0);
 
-static void
-CopyToFIFO(SMap* pSMap,u32* pSrc,int iLen)
-{
-	int	iA;
+	SMap_EnableInterrupts(INTR_TXDNV);
 
-	//Set the start-address in the TX-mem that we're goind to copy to.
-
-	SMAP_REG16(pSMap,SMAP_TXFIFO_WR_PTR)=pSMap->TX.u16PTREnd;
-
-	//Copy the data to the TX-mem.
-
-	for	(iA=0;iA<iLen;iA+=4)
-	{
-		SMAP_REG32(pSMap,SMAP_TXFIFO_DATA)=*pSrc++;
-	}
-}
-
-
-static int
-IsWordAligned(struct pbuf* pBuf)
-{
-
-	//Determine whether pBuf->payload is aligned on a 4-byte boundary.
-
-	u32	u32Address=(u32)(pBuf->payload);
-
-	return	(u32Address&3)==0;
-}
-
-
-static int
-IsEMACReady(SMap* pSMap)
-{
-
-	//Wait for the EMAC to become ready to transmit.
-
-	int	iA;
-
-	for	(iA=0;iA<1000;++iA)
-	{
-		if	(!(EMAC3REG_READ(pSMap,SMAP_EMAC3_TxMODE0)&E3_TX_GNP_0))
-		{
-			return	1;
-		}
-	}
-	return	0;
+	if (pBuf->cb != NULL)
+		pBuf->cb(pBuf->cb_arg);
 }
 
 
 SMapStatus
-SMap_Send(struct pbuf* pPacket)
+SMap_Send(struct pbuf* pBuf)
 {
-
-	//Send the packet, pPacket, over the ethernet.
-
-	SMap*		pSMap=&SMap0;
-	int		iTXLen;
-	SMapBD*	pTXBD=&pSMap->TX.pBD[pSMap->TX.u8IndexEnd];
-	int		iTotalLen=pPacket->tot_len;
+	SMap* pSMap = &SMap0;
+	int iTXLen;
+	int rv;
 
 	//Do we have a valid link?
-
-	if	(!(pSMap->u32Flags&SMAP_F_LINKVALID))
-	{
-
+	if (!(pSMap->u32Flags & SMAP_F_LINKVALID)) {
 		//No, return SMap_Con to indicate that!
-
-		dbgprintf("SMap_Send: Link not valid\n");
-		return	SMap_Con;
+		M_DEBUG("%s: Link not valid\n", __func__);
+		return SMap_Con;
 	}
 
 	//Is the packetsize in the valid range?
-
-	if	(iTotalLen>SMAP_TXMAXSIZE)
-	{
-
+	if (pBuf->len > SMAP_TXMAXSIZE) {
 		//No, return SMap_Err to indicate an error occured.
-
-		dbgprintf("SMap_Send: Packet size too large: %d, Max: %d\n",iTotalLen,SMAP_TXMAXSIZE);
-		return	SMap_Err;
+		M_DEBUG("%s: Packet size too large: %d, Max: %d\n", __func__, pBuf->len, SMAP_TXMAXSIZE);
+		return SMap_Err;
 	}
 
-	//We'll copy whole words to the TX-mem. Compute the number of bytes pPacket will occupy in the TX-mem.
+	//We'll copy whole words to the TX-mem. Compute the number of bytes pBuf will occupy in the TX-mem.
+	iTXLen = (pBuf->len + 3) & ~3;
 
-	iTXLen=(iTotalLen+3)&~3;
-
-	//Is there enough free TX-mem?
-
-	if	(iTXLen>ComputeFreeSize(&pSMap->TX))
-	{
-
-		//No, return SMap_TX to indicate that an TX-resource exhaustion occured.
-
-		dbgprintf("SMap_Send: Not enough free TX-mem, TXLen: %d, Free: %d\n",iTXLen,ComputeFreeSize(&pSMap->TX));
-		return	SMap_TX;
+	if (iTXLen > ComputeFreeSize(&pSMap->TX)) {
+		return SMap_TX;
 	}
 
-	//Is the EMAC ready?
+	// Write to SMAP
+	pBuf->smaptr[0].addr    = pBuf->payload;
+	pBuf->smaptr[0].size    = iTXLen;
+	pBuf->smaptr[0].dir     = DMAC_FROM_MEM;
+	pBuf->smaptr[0].u16PTR  = pSMap->TX.u16PTREnd;
+	pBuf->smaptr[0].u8Index = pSMap->TX.u8IndexDMA;
+	pBuf->smaptr[0].cb_done = _tx_smap_done_callback;
+	pBuf->smaptr[0].cb_arg  = pBuf;
 
-	if	(!IsEMACReady(pSMap))
-	{
-
-		//No, the EMAC didn't become ready, return SMap_Err to indicate an error occured.
-
-		dbgprintf("SMap_Send: EMAC not ready\n");
-		return	SMap_Err;
-	}
-
-	//Is the packet-data located in one buffer aligned on a 4-byte boundary?
-
-	if	(iTotalLen==pPacket->len&&IsWordAligned(pPacket))
-	{
-
-		//Yes, copy the packet-data directly to FIFO.
-
-		CopyToFIFO(pSMap,(u32*)pPacket->payload,iTXLen);
-	}
-	else
-	{
-
-		//No, copy the packet-data to the intermediary TX-buffer.
-
-		CopyToTXBuffer(pSMap,pPacket);
-
-		//Copy TX-buffer to FIFO.
-
-		CopyToFIFO(pSMap,au32TXBuf,iTXLen);
-	}
-
-	//Send from FIFO to ethernet.
-
-	pTXBD->length=iTotalLen;
-	pTXBD->pointer=pSMap->TX.u16PTREnd+SMAP_TXBUFBASE;
-	SMAP_REG8(pSMap,SMAP_TXFIFO_FRAME_INC)=1;
-	pTXBD->ctrl_stat=SMAP_BD_TX_READY|SMAP_BD_TX_GENFCS|SMAP_BD_TX_GENPAD;
-	EMAC3REG_WRITE(pSMap,SMAP_EMAC3_TxMODE0,E3_TX_GNP_0);
+	// Transfer the packet
+	rv = smap_dma_transfer(&pBuf->smaptr[0]);
+	if (rv != 0)
+		M_ERROR("%s: smap_dma_transfer returned %d\n", __func__, rv);
 
 	//Update the end of the active-range.
-
-	pSMap->TX.u16PTREnd=(pSMap->TX.u16PTREnd+iTXLen)%SMAP_TXBUFSIZE;
-	SMAP_BD_NEXT(pSMap->TX.u8IndexEnd);
+	pSMap->TX.u16PTREnd = (pSMap->TX.u16PTREnd + iTXLen) % SMAP_TXBUFSIZE;
+	SMAP_BD_NEXT(pSMap->TX.u8IndexDMA);
 
 	//Return SMap_OK to indicate success.
-
-	return	SMap_OK;
+	return SMap_OK;
 }
 
 
 int
 SMap_HandleTXInterrupt(int iFlags)
 {
+	if (iFlags & INTR_TXDNV)
+		SMap_DisableInterrupts(INTR_TXDNV);
 	SMap_ClearIRQ(iFlags);
-	return	HandleTXInt(iFlags);
+	return HandleTXInt(iFlags);
 }
 
 
 int
 SMap_HandleRXEMACInterrupt(int iFlags)
 {
-	int	iNoError=1;
+	int iNoError = 1;
 
-	if	(iFlags&(INTR_RXDNV|INTR_RXEND))
-	{
-		iFlags&=INTR_RXDNV|INTR_RXEND;
+	if (iFlags & (INTR_RXDNV|INTR_RXEND)) {
+		iFlags &= INTR_RXDNV|INTR_RXEND;
 		SMap_ClearIRQ(iFlags);
-		if	(!HandleRXInt(iFlags))
-		{
-			iNoError=0;
+		if(!HandleRXInt(iFlags)) {
+			iNoError = 0;
 		}
-		iFlags=SMap_GetIRQ();
+		iFlags = SMap_GetIRQ();
 	}
-	if	(iFlags&INTR_EMAC3)
-	{
+	if (iFlags & INTR_EMAC3) {
 		HandleEMAC3Int();
 		SMap_ClearIRQ(INTR_EMAC3);
 	}
-	return	iNoError;
-}
 
-
-void
-SMap_IsLinkValid(SMap* pSMap)
-{
-/*	u16	phyval=0;
-
-	if	(!(pSMap->u32Flags&SMAP_F_INITDONE))
-	{
-		return;
-	}
-
-	phyval=(u16)ReadPhy(pSMap,DsPHYTER_ADDRESS,DsPHYTER_PHYSTS);
-	if	(!(phyval&PHY_STS_LINK))
-	{
-		if (pSMap->u32Flags&SMAP_F_LINKVALID)
-		{
-			pSMap->u32Flags&=~(SMAP_F_LINKESTABLISH|SMAP_F_LINKVALID);
-			Reset(pSMap,RESET_ONLY);
-		}
-	}
-	if	(phyval&PHY_STS_LINK)
-	{
-		if	(!(pSMap->u32Flags&SMAP_F_LINKVALID))
-		{
-			Reset(pSMap,RESET_INIT);
-			TXRXEnable(pSMap,DISABLE);
-			if	(pSMap->u32Flags&SMAP_F_OPENED)
-			{
-				TXBDInit(pSMap);
-				RXBDInit(pSMap);
-				ClearAllIRQs(pSMap);
-				SMap_EnableInterrupts(pSMap);
-				TXRXEnable(pSMap,ENABLE);
-			}
-		}
-	}*/
+	return iNoError;
 }

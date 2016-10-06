@@ -11,9 +11,9 @@ IOP_BIN_DIR = bin/
 IOP_SRC_DIR = src/
 
 IOP_BIN  = $(IOP_BIN_DIR)smaprpc.irx
-IOP_MODS = main smap smap_rpc imports
+IOP_MODS = main pbuf smap smap_dma smap_eeprom smap_mdio smap_cmd smap_rpc imports
 IOP_OBJS = $(addsuffix .o, $(addprefix $(IOP_OBJS_DIR), $(IOP_MODS)))
-IOP_INCS = -I$(PS2SDK)/iop/include
+IOP_INCS = -I$(PS2SDK)/iop/include -I../dev9_dma/include
 
 all: $(IOP_OBJS_DIR) $(IOP_BIN_DIR) $(IOP_BIN)
 

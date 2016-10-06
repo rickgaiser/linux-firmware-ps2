@@ -22,42 +22,35 @@
 #include <thsemap.h>
 #include <vblank.h>
 #include <intrman.h>
+#include <sifman.h>
+#include <sifcmd.h>
 #include <sifrpc.h>
 
 #include "smap.h"
 #include "dev9.h"
+#include "smap_cmd.h"
 #include "smap_rpc.h"
+#include "dev9_dma.h"
 #include "pbuf.h"
 #include "main.h"
 
-IRX_ID("smaprpc", 1, 0);
+IRX_ID(MODNAME, 1, 0);
 
 #define	UNKN_1464   *(u16 volatile*)0xbf801464
 
-#define	IFNAME0	's'
-#define	IFNAME1	'm'
-
 #define	TIMER_INTERVAL		(100*1000)
-#define	TIMEOUT				(300*1000)
-#define	MAX_REQ_CNT			64
-#define NR_OF_SMAP_RX_MSGS 16
+#define	TIMEOUT			(300*1000)
+#define	MAX_REQ_CNT		64
 
 
 static int 		iReqNR=0;
 static int 		iReqCNT=0;
-static PBuf*	apReqQueue[MAX_REQ_CNT];
+static PBuf*		apReqQueue[MAX_REQ_CNT];
 static int		iTimeoutCNT=0;
 
 u32 ee_buffer;
 u32 ee_buffer_pos;
 u32 volatile ee_buffer_size = 0;
-
-
-//From lwip/err.h and lwip/tcpip.h
-
-#define	ERR_OK		0		//No error, everything OK
-#define	ERR_CONN		-6		//Not connected
-#define	ERR_IF		-11	//Low-level netif error
 
 
 static void
@@ -66,221 +59,173 @@ StoreLast(PBuf* pBuf)
 
 	//Store pBuf last in the request-queue.
 
-	apReqQueue[(iReqNR+iReqCNT)%MAX_REQ_CNT]=pBuf;
-	++iReqCNT;
+	apReqQueue[(iReqNR+iReqCNT)%MAX_REQ_CNT] = pBuf;
+	iReqCNT++;
 
 	//Since pBuf won't be sent right away, increase the reference-count to prevent it from being deleted before it's sent.
-
-	++(pBuf->ref);
+	pBuf->ref++;
 }
 
 
-static SMapStatus
-AddToQueue(PBuf* pBuf)
+static PBuf*
+GetFirst(void)
 {
+	return apReqQueue[iReqNR];
+}
 
-	//Add pBuf to the request-queue.
 
-	int			iIntFlags;
-	SMapStatus	Ret;
+static void
+PopFirst(void)
+{
+	iReqNR = (iReqNR + 1) % MAX_REQ_CNT;
+	iReqCNT--;
+}
 
-	//Due to synchronization issues, disable the interrupts.
+
+static void
+tx_queue_reset(void)
+{
+	M_DEBUG("%s: iReqCNT = %d\n", __func__, iReqCNT);
+
+	iReqNR = 0;
+	iReqCNT = 0;
+	iTimeoutCNT = 0;
+}
+
+
+void
+smap_reset(void)
+{
+	int iIntFlags;
 
 	CpuSuspendIntr(&iIntFlags);
 
-	if	(iReqCNT==0)
-	{
-
-		//The queue is empty, try to send the packet right away.
-
-		Ret=SMap_Send(pBuf);
-
-		//Did a TX-resource exhaustion occur?
-
-		if	(Ret==SMap_OK)
-		{
-			if (pBuf->cb != NULL)
-				pBuf->cb(pBuf->cb_arg);
-		}
-
-		if	(Ret==SMap_TX)
-		{
-
-			//Yes, store pBuf last in the queue so it's sent when there are enough TX-resources.
-
-			StoreLast(pBuf);
-
-			//Clear the timout-timer.
-
-			iTimeoutCNT=0;
-
-			//Set the return-value to SMap_OK to indicate that pBuf has been either sent or added to the queue.
-
-			Ret=SMap_OK;
-		}
-		if	(Ret==SMap_OK)
-		{
-			pbuf_free(pBuf);
-		}
-	}
-	else if	(iReqCNT<MAX_REQ_CNT)
-	{
-
-		//There queue isn't empty but there is atleast one free entry. Store pBuf last in the queue.
-
-		StoreLast(pBuf);
-
-		//Set the return-value to SMap_OK to indicate that pBuf has been either sent or added to the queue.
-
-		Ret=SMap_OK;
-	}
-	else
-	{
-
-		//The queue is full, return SMap_TX to indicate that.
-
-		Ret=SMap_TX;
-	}
-
-	//Restore the interrupts.
+	tx_queue_reset();
+	pbuf_reset();
 
 	CpuResumeIntr(iIntFlags);
-	return	Ret;
+}
+
+
+SMapStatus
+SMapLowLevelOutput(PBuf* pBuf)
+{
+	int iIntFlags;
+	SMapStatus Ret;
+
+	CpuSuspendIntr(&iIntFlags);
+
+	if (iReqCNT == 0) {
+		Ret = SMap_Send(pBuf);
+
+		// Reply
+		if (Ret != SMap_OK) {
+			if (Ret == SMap_TX) {
+				// TX buffer full, place in queue so we can send it later
+				StoreLast(pBuf);
+				iTimeoutCNT = 0;
+				Ret = SMap_OK;
+			}
+			else {
+				M_ERROR("%s\n", __func__);
+				// ERROR: callback user
+				pBuf->cmd._spare = 0xffffffff;
+				if (pBuf->cb != NULL)
+					pBuf->cb(pBuf->cb_arg);
+			}
+		}
+	}
+	else if	(iReqCNT < MAX_REQ_CNT) {
+		StoreLast(pBuf);
+		Ret = SMap_OK;
+	}
+	else {
+		Ret = SMap_TX;
+	}
+
+	CpuResumeIntr(iIntFlags);
+
+	return Ret;
 }
 
 
 static void
 SendRequests(void)
 {
+	while (iReqCNT > 0) {
+		PBuf *pBuf = GetFirst();
+		SMapStatus Status = SMap_Send(pBuf);
 
-	//This function should only be called from QueueHandler. It tries to send as many requests from the queue until there is an
-	//TX-resource exhaustion.
-
-	while	(iReqCNT>0)
-	{
-
-		//Retrieve the first request in the queue.
-
-		PBuf*		pReq=apReqQueue[iReqNR];
-
-		//Try to send the packet!
-
-		SMapStatus	Status=SMap_Send(pReq);
-
-		//Clear the timout-timer.
-
-		iTimeoutCNT=0;
-
-		//Did a TX-resource exhaustion occur?
-
-		if	(Status==SMap_TX)
-		{
-
-			//Yes, we'll try to re-send the packet the next time a TX-interrupt occur, exit!
-
+		if (Status == SMap_TX) {
+			iTimeoutCNT = 0;
 			return;
 		}
 
-		//No resource-exhaustion occured. Regardless if the packet was successfully sent or nor, process the next request. If it's
-		//an important package and ps2ip won't receive an ack, it'll resend the package. We are done with pReq and should invoke
-		//pbuf_free to decrease the ref-count.
+		if (Status != SMap_OK) {
+			M_ERROR("%s\n", __func__);
+			// ERROR: callback user
+			pBuf->cmd._spare = 0xffffffff;
+			if (pBuf->cb != NULL)
+				pBuf->cb(pBuf->cb_arg);
+		}
 
-		if (pReq->cb != NULL)
-			pReq->cb(pReq->cb_arg);
-
-		pbuf_free(pReq);
-
-		//pReq has been sent, advance the queue-index one step.
-
-		iReqNR=(iReqNR+1)%MAX_REQ_CNT;
-		--iReqCNT;
+		PopFirst();
 	}
 }
 
 
-static void
-QueueHandler(void)
-{
-
-	//This function should only be called from an interrupt-context. It tries to send as many requests as possible from the queue
-	//and signals any waiting thread if the queue becomes non-full. Start with trying to send the reqs.
-
-	SendRequests();
-}
-
-
-static int 
+static int
 SMapInterrupt(int iFlag)
 {
-	int	iFlags=SMap_GetIRQ();
+	int iFlags = SMap_GetIRQ();
 
-	if	(iFlags&(INTR_TXDNV|INTR_TXEND))
-	{
-
+	if (iFlags & (INTR_TXDNV|INTR_TXEND)) {
 		//It's a TX-interrupt, handle it now!
-
-		SMap_HandleTXInterrupt(iFlags&(INTR_TXDNV|INTR_TXEND));
+		SMap_HandleTXInterrupt(iFlags & (INTR_TXDNV|INTR_TXEND));
 
 		//Handle the request-queue.
+		SendRequests();
 
-		QueueHandler();
-
-		//Several packets might have been sent during QueueHandler and we might have spent a couple of 1000 usec. Re-read the
+		//Several packets might have been sent during SendRequests and we might have spent a couple of 1000 usec. Re-read the
 		//interrupt-flags to more accurately reflect the current interrupt-status.
-
-		iFlags=SMap_GetIRQ();
+		iFlags = SMap_GetIRQ();
 	}
 
-	if	(iFlags&(INTR_EMAC3|INTR_RXDNV|INTR_RXEND))
-	{
-
+	if (iFlags & (INTR_EMAC3|INTR_RXDNV|INTR_RXEND)) {
 		//It's a RX- or a EMAC-interrupt, handle it!
-
-		SMap_HandleRXEMACInterrupt(iFlags&(INTR_EMAC3|INTR_RXDNV|INTR_RXEND));
+		SMap_HandleRXEMACInterrupt(iFlags & (INTR_EMAC3|INTR_RXDNV|INTR_RXEND));
 	}
-	return	1;
+
+	return 1;
 }
 
 
-static unsigned int 
+static unsigned int
 Timer(void* pvArg)
 {
-
-	//Are there any requests in the queue?
-
-	if	(iReqCNT==0)
-	{
-
-		//No, exit!
-
-		return	(unsigned int)pvArg;
+	if (iReqCNT <= 0) {
+		iTimeoutCNT = 0;
+	}
+	else {
+		iTimeoutCNT += TIMER_INTERVAL;
+		if (iTimeoutCNT >= TIMEOUT) {
+			M_ERROR("%s: TX timeout!\n", __func__);
+			SendRequests();
+			iTimeoutCNT = 0;
+		}
 	}
 
-	//Yes, If no TX-interrupt has occured for the last TIMEOUT usec, process the request-queue.
-
-	iTimeoutCNT+=TIMER_INTERVAL;
-	if	(iTimeoutCNT>=TIMEOUT&&iTimeoutCNT<(TIMEOUT+TIMER_INTERVAL))
-	{
-
-		//Timeout, handle the request-queue.
-
-		QueueHandler();
-	}
-	return	(unsigned int)pvArg;
+	return (unsigned int)pvArg;
 }
 
 
 static void
 InstallIRQHandler(void)
 {
+	int iA;
 
-	//Install the SMap interrupthandler for all of the SMap-interrupts.
-
-	int	iA;
-
-	for	(iA=2;iA<7;++iA)
-	{
-		dev9RegisterIntrCb(iA,SMapInterrupt);
+	for (iA=2;iA<7;++iA) {
+		dev9RegisterIntrCb(iA, SMapInterrupt);
 	}
 }
 
@@ -290,15 +235,15 @@ InstallTimer(void)
 {
 	iop_sys_clock_t	ClockTicks;
 
-	USec2SysClock(TIMER_INTERVAL,&ClockTicks);
-	SetAlarm(&ClockTicks,Timer,(void*)ClockTicks.lo);
+	USec2SysClock(TIMER_INTERVAL, &ClockTicks);
+	SetAlarm(&ClockTicks, Timer, (void*)ClockTicks.lo);
 }
 
 
 static void
 DetectAndInitDev9(void)
 {
-	SMap_DisableInterrupts(INTR_BITMSK);
+	SMap_DisableInterrupts(INTR_ALL);
 	EnableIntr(IOP_IRQ_DEV9);
 	CpuEnableIntr();
 
@@ -306,144 +251,68 @@ DetectAndInitDev9(void)
 }
 
 
-static err_t
-Send(PBuf* pBuf)
-{
-	SMapStatus Res;
-
-	//Try to add the packet to the request-queue.
-
-	if ((Res=AddToQueue(pBuf))==SMap_OK)
-	{
-
-		//The packet was sent successfully or added to the queue, return ERR_OK.
-
-		return	ERR_OK;
-	}
-	else if (Res==SMap_Err)
-	{
-
-		//SMap_Send wasn't able to send the packet due to some hardware limitation, return ERR_IF to indicate that.
-
-		return	ERR_IF;
-	}
-	else //if (Res==SMap_Con)
-	{
-
-		//SMap_Send wasn't able to send the packet due to not being connected, return ERR_CONN to indicate that.
-
-		return	ERR_CONN;
-	}
-}
-
-
-//SMapLowLevelOutput():
-
-//This function is called by the TCP/IP stack when a low-level packet should be sent. It'll be invoked in the context of the
-//tcpip-thread.
-
-err_t SMapLowLevelOutput(PBuf* pOutput)
-{
-	return	Send(pOutput);
-}
-
-
-//SMapIFInit():
-
-//Should be called at the beginning of the program to set up the network interface.
-
-static err_t
-SMapIFInit(void)
-{
-	//Enable sending and receiving of data.
-
-	SMap_Start();
-	return	ERR_OK;
-}
-
-
 void
 SMapLowLevelInput(PBuf* pBuf)
 {
-	//When we receive data, the interrupt-handler will invoke this function, which means we are in an interrupt-context. Pass on
-	//the received data to EE.
-	
-	if (pBuf != NULL) {
-		u8 *data = pBuf->payload;
+	struct ps2_smap_cmd_rw *cmd = &pBuf->cmd;
+	struct ps2_smap_sg *cmd_sg = &pBuf->cmd_sg[0];
+	int i;
 
-		if (data != NULL) {
-
-			if (ee_buffer_size > 0) {
-				static smap_message_t smap_msg[NR_OF_SMAP_RX_MSGS] __attribute__((aligned(64)));
-				static int nr = 0;
-				int ret;
-
-				if ((ee_buffer_pos + pBuf->tot_len) > ee_buffer_size) {
-					ee_buffer_pos = 0;
-				}
-				smap_msg[nr].payload = ee_buffer + ee_buffer_pos;
-				smap_msg[nr].size = pBuf->tot_len;
-				ret = sceSifSendCmd(SIF_SMAP_RECEIVE, &smap_msg[nr], sizeof(smap_msg[nr]), data, (void *) smap_msg[nr].payload, smap_msg[nr].size);
-				if (ret == 0) {
-					printf("Failed to send message (ret = %d).\n", ret);
-				}
-				pBuf->id = ret;
-				ee_buffer_pos = (ee_buffer_pos + pBuf->tot_len + DMA_TRANSFER_SIZE - 1) & ~(DMA_TRANSFER_SIZE - 1);
-				nr = (nr + 1) % NR_OF_SMAP_RX_MSGS;
-			} else {
-				printf("Loosing ethernet frame. No EE rx buffer.\n");
-			}
-		} else {
-			printf("Receive data error.\n");
-		}
-	} else {
-		printf("Receive pBuf error.\n");
+	if (ee_buffer_size <= 0) {
+		M_ERROR("%s: Loosing ethernet frame. No EE rx buffer\n", __func__);
+		return;
 	}
-}
 
-
-static int
-SMapInit(void)
-{
-	DetectAndInitDev9();
-	dbgprintf("SMapInit: Dev9 detected & initialized\n");
-
-	if	(!SMap_Init())
-	{
-		return	0;
+	if ((ee_buffer_pos + pBuf->len) > ee_buffer_size) {
+		ee_buffer_pos = 0;
 	}
-	dbgprintf("SMapInit: SMap initialized\n");
 
-	InstallIRQHandler();
-	dbgprintf("SMapInit: Interrupt-handler installed\n");
+	/* Change from IOP addr to EE addr */
+	for (i = 0; i < cmd->sg_count; i++)
+		cmd_sg[i].addr = (ee_buffer + ee_buffer_pos) + (cmd_sg[i].addr - cmd_sg[0].addr);
 
-	InstallTimer();
-	dbgprintf("SMapInit: Timer installed\n");
+	pBuf->id = isceSifSendCmd(SIF_SMAP_RECEIVE, cmd, sizeof(struct ps2_smap_cmd_rw) + cmd->sg_count * sizeof(struct ps2_smap_sg), pBuf->payload, (void *)cmd_sg[0].addr, pBuf->len);
+	if (pBuf->id == 0) {
+		M_ERROR("%s: isceSifSendCmd failed\n", __func__);
+		pbuf_free(pBuf);
+		return;
+	}
 
-	SMapIFInit();
-	dbgprintf("SMapInit: SMapIFInit\n");
-
-	//Return 1 (true) to indicate success.
-
-	return	1;
+	ee_buffer_pos = (ee_buffer_pos + pBuf->len + DMA_TRANSFER_SIZE - 1) & ~(DMA_TRANSFER_SIZE - 1);
 }
 
 
 int
-_start(int iArgC,char** ppcArgV)
+_start(int argc, char *argv[])
 {
-	if	(!SMapInit())
-	{
+	if (!sceSifCheckInit())
+		sceSifInit();
+	sceSifInitRpc(0);
 
-		//Something went wrong, return -1 to indicate failure.
+	DetectAndInitDev9();
 
-		return	-1;
+	if (!SMap_Init()) {
+		M_ERROR("failed to init smap\n");
+		return	MODULE_NO_RESIDENT_END;
 	}
 
-	printf("SMap: Initialized OK\n");
+	InstallIRQHandler();
 
-	//Initialized ok.
-	rpc_start();
+	InstallTimer();
 
-	return	0;
+	SMap_Start();
+
+	if(smap_cmd_init() != 0) {
+		M_ERROR("failed to init cmd\n");
+		return MODULE_NO_RESIDENT_END;
+	}
+
+	if(smap_rpc_init() != 0) {
+		M_ERROR("failed to init rpc\n");
+		return MODULE_NO_RESIDENT_END;
+	}
+
+	M_PRINTF("running\n");
+
+	return	MODULE_RESIDENT_END;
 }
