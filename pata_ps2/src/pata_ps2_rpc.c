@@ -56,7 +56,8 @@ _rpc_set_dir(struct ps2_ata_rpc_set_dir *rpc)
 static void *
 _rpc_cmd_handler(u32 command, void *buffer, int size)
 {
-	int ret;
+	u32 *buf = (u32 *)buffer;
+	int ret = 0;
 
 	M_DEBUG("%s(%lu)\n", __func__, command);
 
@@ -70,7 +71,7 @@ _rpc_cmd_handler(u32 command, void *buffer, int size)
 			break;
 	}
 
-	((u32 *)buffer)[0] = ret;
+	buf[0] = ret;
 
 	return buffer;
 }
