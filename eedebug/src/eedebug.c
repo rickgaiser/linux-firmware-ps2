@@ -7,6 +7,7 @@
 #include <ioman.h>
 #include <intrman.h>
 #include <loadcore.h>
+#include <sifman.h>
 #include <sifcmd.h>
 
 #include "iopprintdata.h"
@@ -18,7 +19,7 @@ IRX_ID(MODNAME, 1, 1);
 /** Maximum buffer size. */
 #define BUFFER_SIZE 1024
 
-static eePrint(const char *text);
+static void eePrint(const char *text);
 static int ttyMount(void);
 void eedebug_thread(void *unused);
 
@@ -32,7 +33,6 @@ static int tty_sema = -1;
 int _start(int argc, char **argv)
 {
 	iop_thread_t thread;
-	int th;
 	int res;
 
 	if (!sceSifCheckInit())
@@ -61,7 +61,7 @@ int _start(int argc, char **argv)
 	return 0;
 }
 
-static eePrint(const char *text)
+static void eePrint(const char *text)
 {
 	static iop_text_data_t text_data __attribute__((aligned(64)));
 	strncpy(text_data.text, text, 80);
@@ -204,8 +204,6 @@ static int ttyMount(void)
 
 void eedebug_thread(void *unused)
 {
-	static iop_text_data_t text_data __attribute__((aligned(64)));
-
 	eePrint(MODNAME ": eedebug_thread running.\n");
 	while (1) {
 		eePrintBuffer();
