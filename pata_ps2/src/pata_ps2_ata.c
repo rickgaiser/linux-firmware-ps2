@@ -1,6 +1,7 @@
 #include "pata_ps2.h"
-#include "pata_ps2_dev9.h"
 #include "pata_ps2_ata.h"
+
+#include "dev9_dma.h"
 
 #include "intrman.h"
 #include "dmacman.h"
@@ -26,6 +27,7 @@ struct ata_transfer {
 	void *cb_arg;
 };
 static struct ata_transfer transfer;
+static struct dev9_dma_client dev9_dma;
 
 static void _transfer_start(struct ata_transfer *tr);
 
@@ -36,7 +38,7 @@ static inline u32 min(u32 a, u32 b) {return (a<b)?a:b;}
 static inline u32 max(u32 a, u32 b) {return (a>b)?a:b;}
 
 static void
-_transfer_callback(void *arg)
+_transfer_callback(struct dev9_dma_transfer *dev9_dma_tr, void *arg)
 {
 	struct ata_transfer *tr = arg;
 	void *addr2;
@@ -84,31 +86,32 @@ _transfer_start(struct ata_transfer *tr)
 
 	/* Start DMA transfer: IOP <--> SPEED */
 	tr->state = TRS_TRANSFER;
-	pata_ps2_dev9_transfer(0, tr->addr, (tr->size_xfer << 7)|128, (tr->write == 0) ? DMAC_TO_MEM : DMAC_FROM_MEM, _transfer_callback, tr);
+	dev9_dma_transfer(&dev9_dma, tr->addr, tr->size_xfer, (tr->write == 0) ? DMAC_TO_MEM : DMAC_FROM_MEM, tr);
 }
 
-#ifdef USE_PS2SDK_DEV9
-static void AtadPreDmaCb(int bcr, int dir)
+static void
+_pre_dma_cb(struct dev9_dma_transfer *tr, void *arg)
 {
 	USE_SPD_REGS;
 
 	M_DEBUG("%s\n", __func__);
 
-	SPD_REG16(SPD_R_XFR_CTRL)|=0x80;
+	SPD_REG16(SPD_R_XFR_CTRL) |= 0x80;
 }
 
-static void AtadPostDmaCb(int bcr, int dir)
+static void
+_post_dma_cb(struct dev9_dma_transfer *tr, void *arg)
 {
 	USE_SPD_REGS;
 
 	M_DEBUG("%s\n", __func__);
 
-	SPD_REG16(SPD_R_XFR_CTRL)&=~0x80;
+	SPD_REG16(SPD_R_XFR_CTRL) &= ~0x80;
 }
-#endif
 
 /* ATA command completion interrupt */
-static int _intr_ata0(int flag)
+static int
+_intr_ata0(int flag)
 {
 	struct ata_transfer *tr = &transfer;
 
@@ -131,7 +134,8 @@ static int _intr_ata0(int flag)
 }
 
 /* ATA ??? ready for DMA ??? interrupt */
-static int _intr_ata1(int flag)
+static int
+_intr_ata1(int flag)
 {
 	dev9IntrDisable(SPD_INTR_ATA1);
 
@@ -198,10 +202,12 @@ pata_ps2_ata_init()
 
 	tr->state = TRS_DONE;
 
-#ifdef USE_PS2SDK_DEV9
-	dev9RegisterPreDmaCb (0, &AtadPreDmaCb);
-	dev9RegisterPostDmaCb(0, &AtadPostDmaCb);
-#endif
+	if (dev9_dma_client_init(&dev9_dma, 0, 7) != 0) {
+		return -1;
+	}
+	dev9_dma.cb_pre_dma = _pre_dma_cb;
+	dev9_dma.cb_post_dma = _post_dma_cb;
+	dev9_dma.cb_done = _transfer_callback;
 
 	dev9IntrDisable(SPD_INTR_ATA0|SPD_INTR_ATA1);
 	dev9RegisterIntrCb(0, &_intr_ata0);

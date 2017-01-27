@@ -80,3 +80,8 @@ I_dev9LEDCtl
 I_dev9RegisterPreDmaCb
 I_dev9RegisterPostDmaCb
 dev9_IMPORTS_end
+
+dev9_dma_IMPORTS_start
+I_dev9_dma_transfer
+I_dev9_dma_client_init
+dev9_dma_IMPORTS_end

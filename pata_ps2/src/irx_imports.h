@@ -13,6 +13,7 @@
 
 /* Please keep these in alphabetical order!  */
 #include "dev9.h"
+#include "dev9_dma.h"
 #include "dmacman.h"
 #include "intrman.h"
 #include "loadcore.h"

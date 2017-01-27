@@ -3,7 +3,8 @@
 
 
 #include "types.h"
-#include "pata_ps2_dev9.h"
+#include "pata_ps2_ata.h"
+#include "dev9_dma.h"
 
 
 /*

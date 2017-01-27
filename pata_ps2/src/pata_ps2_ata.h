@@ -3,10 +3,14 @@
 
 
 #include "types.h"
-#include "pata_ps2_dev9.h"
+#include "dev9_dma.h"
 
 
 #define ATA_MAX_TRANSFER_SIZE	(16*1024)
+
+
+typedef void (*block_done_callback)(void *addr, u32 size, void *arg);
+
 
 
 void pata_ps2_ata_set_dir(int dir);
