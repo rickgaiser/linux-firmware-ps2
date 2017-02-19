@@ -1,3 +1,9 @@
+INSTALL_DIR = compiled_irx/ps2sdk/
+LINUX_DIR   = ../linux/firmware/ps2/
+PS2SDK_MODS = ps2dev9 freesd audsrv poweroff
+PS2SDK_OBJS = $(addsuffix .irx, $(addprefix $(LINUX_DIR), $(PS2SDK_MODS)))
+
+
 all:
 	make -C dev9_dma all
 	make -C eedebug all
@@ -17,17 +23,17 @@ clean:
 	make -C intrelay DEV9_SUPPORT=yes RPC_IRQ_SUPPORT=yes clean
 	make -C pata_ps2 clean
 	make -C smaprpc clean
-	rm -f compiled_irx/*.irx
+	rm -f $(LINUX_DIR)*.irx
 
-install:
-	cp dev9_dma/bin/dev9_dma.irx		compiled_irx/
-	cp eedebug/bin/eedebug.irx		compiled_irx/
-	cp intrelay/bin/intrelay-dev9.irx	compiled_irx/
-	cp intrelay/bin/intrelay-dev9-rpc.irx	compiled_irx/
-	cp intrelay/bin/intrelay-direct.irx	compiled_irx/
-	cp intrelay/bin/intrelay-direct-rpc.irx	compiled_irx/
-	cp pata_ps2/bin/pata_ps2.irx		compiled_irx/
-	cp smaprpc/bin/smaprpc.irx		compiled_irx/
-	cp compiled_irx/*.irx			../linux/firmware/ps2/
-	cp compiled_irx/ps2sdk/*.irx		../linux/firmware/ps2/
+$(LINUX_DIR)%.irx: $(INSTALL_DIR)%.irx
+	cp $< $@
 
+install: $(PS2SDK_OBJS)
+	make -C dev9_dma install
+	make -C eedebug install
+	make -C intrelay DEV9_SUPPORT=no RPC_IRQ_SUPPORT=no install
+	make -C intrelay DEV9_SUPPORT=no RPC_IRQ_SUPPORT=yes install
+	make -C intrelay DEV9_SUPPORT=yes RPC_IRQ_SUPPORT=no install
+	make -C intrelay DEV9_SUPPORT=yes RPC_IRQ_SUPPORT=yes install
+	make -C pata_ps2 install
+	make -C smaprpc install

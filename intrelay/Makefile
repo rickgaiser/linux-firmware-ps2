@@ -28,6 +28,7 @@ DEV9_TYPE=-direct
 endif
 IOP_OBJS_DIR = obj$(DEV9_TYPE)$(IRQ_TYPE)/
 IOP_BIN  = bin/intrelay$(DEV9_TYPE)$(IRQ_TYPE).irx
+INST_BIN = ../compiled_irx/intrelay$(DEV9_TYPE)$(IRQ_TYPE).irx
 
 IOP_MODS = intrelay imports usb
 IOP_OBJS = $(addsuffix .o, $(addprefix $(IOP_OBJS_DIR), $(IOP_MODS)))
@@ -39,6 +40,13 @@ all: $(IOP_OBJS_DIR) $(IOP_BIN_DIR) $(IOP_BIN)
 
 clean:
 	rm -f -r $(IOP_OBJS_DIR) $(IOP_BIN_DIR)
+	rm -f $(INST_BIN)
+
+$(INST_BIN): $(IOP_BIN)
+	cp $(IOP_BIN) ../compiled_irx/
+	cp $(IOP_BIN) ../../linux/firmware/ps2/
+
+install: $(INST_BIN)
 
 include $(PS2SDKSRC)/Defs.make
 include $(PS2SDKSRC)/iop/Rules.make
