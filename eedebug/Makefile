@@ -12,8 +12,7 @@ IOP_SRC_DIR = src/
 
 IOP_BIN  = $(IOP_BIN_DIR)eedebug.irx
 INST_BIN = ../compiled_irx/eedebug.irx
-IOP_MODS = eedebug imports
-IOP_OBJS = $(addsuffix .o, $(addprefix $(IOP_OBJS_DIR), $(IOP_MODS)))
+IOP_OBJS = eedebug.o imports.o
 IOP_INCS = -I../include
 
 all: $(IOP_OBJS_DIR) $(IOP_BIN_DIR) $(IOP_BIN)

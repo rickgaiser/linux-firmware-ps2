@@ -30,8 +30,7 @@ IOP_OBJS_DIR = obj$(DEV9_TYPE)$(IRQ_TYPE)/
 IOP_BIN  = bin/intrelay$(DEV9_TYPE)$(IRQ_TYPE).irx
 INST_BIN = ../compiled_irx/intrelay$(DEV9_TYPE)$(IRQ_TYPE).irx
 
-IOP_MODS = intrelay imports usb
-IOP_OBJS = $(addsuffix .o, $(addprefix $(IOP_OBJS_DIR), $(IOP_MODS)))
+IOP_OBJS = intrelay.o imports.o usb.o
 IOP_INCS += -I../include
 IOP_CFLAGS  += -Wall -fno-builtin-printf -fno-builtin-memcpy -Wimplicit-int -Werror-implicit-function-declaration -Werror
 IOP_LDFLAGS += -s

@@ -12,8 +12,7 @@ IOP_SRC_DIR = src/
 
 IOP_BIN  = $(IOP_BIN_DIR)pata_ps2.irx
 INST_BIN = ../compiled_irx/pata_ps2.irx
-IOP_MODS = main pata_ps2_ata pata_ps2_buffer pata_ps2_cmd pata_ps2_rpc imports
-IOP_OBJS = $(addsuffix .o, $(addprefix $(IOP_OBJS_DIR), $(IOP_MODS)))
+IOP_OBJS = main.o pata_ps2_ata.o pata_ps2_buffer.o pata_ps2_cmd.o pata_ps2_rpc.o imports.o
 IOP_INCS = -I$(PS2SDK)/iop/include -I../dev9_dma/include
 
 all: $(IOP_OBJS_DIR) $(IOP_BIN_DIR) $(IOP_BIN)

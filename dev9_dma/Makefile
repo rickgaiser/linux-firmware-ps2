@@ -13,8 +13,7 @@ IOP_INC_DIR = include/
 
 IOP_BIN  = $(IOP_BIN_DIR)dev9_dma.irx
 INST_BIN = ../compiled_irx/dev9_dma.irx
-IOP_MODS = dev9_dma exports imports
-IOP_OBJS = $(addsuffix .o, $(addprefix $(IOP_OBJS_DIR), $(IOP_MODS)))
+IOP_OBJS = dev9_dma.o exports.o imports.o
 IOP_INCS = -I$(PS2SDK)/iop/include
 
 all: $(IOP_OBJS_DIR) $(IOP_BIN_DIR) $(IOP_BIN)
